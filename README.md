@@ -15,14 +15,14 @@ powershell -c "irm minc.dev/install.ps1 | iex"
 curl -fsSL https://minc.dev/install | bash
 ```
 
-Then clone this repo and run any example:
+Then clone this repo and run any example straight from the root:
 
 ```
 git clone https://github.com/SpacesOfPlay/minc-samples
 cd minc-samples
-minc run examples/hello.mc
-minc run examples/sokol_cube.mc
-minc run examples/raytracer.mc
+minc run hello.mc
+minc run sokol_cube.mc
+minc run raytracer.mc
 ```
 
 `minc run` compiles to a temp file and launches it in one step.
@@ -52,7 +52,9 @@ tree's `lib/` would shadow the installed compiler's.
 | `shim_demo.mc` | linking C code (see `build.sh shim`) |
 
 Graphics examples read assets from `test/` relative to the cwd, so
-run them from the repo root.
+run them from the repo root. `lib/` holds shared helper headers some
+examples import (`frame_timer.mc`); everything else resolves against
+the installed compiler's own standard library.
 
 ## Build script
 

@@ -650,7 +650,8 @@ MANIFEST
 
 # --- Dispatch ---
 
-EXAMPLES_DIR="$SCRIPT_DIR/examples"
+# Example .mc files sit at the repo root, next to this script.
+EXAMPLES_DIR="$SCRIPT_DIR"
 CMD="${1:-help}"
 ARG="${2:-}"
 
@@ -670,9 +671,9 @@ case "$CMD" in
     wasm)
         if [ -z "$ARG" ]; then
             echo -e "${YELLOW}Usage: ./build.sh wasm <example>${NC}"
-            echo "  Any .mc file under examples/ that uses sokol_app for windowing."
+            echo "  Any example .mc that uses sokol_app for windowing."
             echo "  Verified: sokol_cube, sokol_texcube, sokol_mandelbrot, sphere_physics, raytracer, missile"
-            echo "  Or pass your own: ./build.sh wasm my_app  (needs examples/my_app.mc)"
+            echo "  Or pass your own: ./build.sh wasm my_app  (needs my_app.mc next to this script)"
             exit 1
         fi
         # Normalize known short aliases.
@@ -728,7 +729,7 @@ case "$CMD" in
         echo "  sokol_mandelbrot   Compile and launch fragment-shader Mandelbrot"
         echo "  sphere_physics     Compile and launch bouncing-spheres demo"
         echo "  wasm <example>     Compile to wasm and open in browser"
-        echo "                     (any .mc in examples/ that uses sokol_app;"
+        echo "                     (any example .mc that uses sokol_app;"
         echo "                      verified: sokol_cube, sokol_texcube,"
         echo "                      sokol_mandelbrot, sphere_physics, raytracer, missile)"
         echo "  shim               Compile and run the C-shim FFI example (needs gcc/clang)"

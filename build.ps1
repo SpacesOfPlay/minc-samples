@@ -15,7 +15,8 @@ param(
 $ErrorActionPreference = "Stop"
 $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $BuildDir = Join-Path $ScriptDir "build"
-$ExamplesDir = Join-Path $ScriptDir "examples"
+# Example .mc files sit at the repo root, next to this script.
+$ExamplesDir = $ScriptDir
 
 # minc: $env:MINC override, else PATH (installed toolchain), else
 # next to this script (manual zip layout).
