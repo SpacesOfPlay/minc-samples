@@ -6,7 +6,7 @@
 
 import sokol_all;
 import math;
-import "lib/frame_timer.mc";
+import frame_timer;
 
 
 // --- Shaders ---

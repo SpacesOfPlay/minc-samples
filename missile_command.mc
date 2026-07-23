@@ -5,7 +5,7 @@ import sokol_audio;
 import math;
 import linear;
 import sokol_debugtext_font;
-import "lib/frame_timer.mc";
+import frame_timer;
 
 // ============================================================================
 // Constants
