@@ -100,16 +100,16 @@ sg_sampler tex_smp;
 sg_view tex_view;
 
 // ============================================================================
-// RNG (xorshift64)
+// RNG — Marsaglia xorshift64, shift triple (13, 7, 17)
 // ============================================================================
 
-i64 rng_state = 123456789;
+// The state is unsigned so the middle shift stays logical.
+u64 rng_state = 123456789;
 
-i64 rng_next() {
+u64 rng_next() {
     rng_state = rng_state ^ (rng_state << 13);
     rng_state = rng_state ^ (rng_state >> 7);
     rng_state = rng_state ^ (rng_state << 17);
-    if rng_state < 0 { rng_state = 0 - rng_state; }
     return rng_state;
 }
 

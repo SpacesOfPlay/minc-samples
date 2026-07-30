@@ -22,10 +22,11 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR/build"
 
-# minc: $MINC override, else PATH (installed toolchain), else next
-# to this script (manual zip layout).
+# minc: $MINC override (install dir, or a direct binary path), else
+# PATH (installed toolchain), else next to this script (manual zip
+# layout).
 if [ -n "${MINC:-}" ]; then
-    CC="$MINC"
+    if [ -d "$MINC" ]; then CC="$MINC/minc"; else CC="$MINC"; fi
 elif command -v minc >/dev/null 2>&1; then
     CC="$(command -v minc)"
 else
@@ -33,7 +34,7 @@ else
 fi
 
 if [ ! -f "$CC" ]; then
-    echo -e "${RED}ERROR: minc not found. Install it (https://minc.dev) or set MINC to the binary.${NC}"
+    echo -e "${RED}ERROR: minc not found. Install it (https://minc.dev) or set MINC to the install dir.${NC}"
     exit 1
 fi
 mkdir -p "$BUILD_DIR"

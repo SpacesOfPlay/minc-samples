@@ -6,17 +6,17 @@
 //
 // Build & run:  ./build.sh shim   (or  .\build.ps1 shim  on Windows)
 //
-// @link paths resolve relative to this file, so "../build/x" lands in the
+// @link paths resolve relative to this file, so "build/x" lands in the
 // repo's build/ dir from any working directory. Each platform links its
 // native object format (ELF / Mach-O / COFF).
 when os(linux) {
-    @link "../build/shim_demo_linux.o"
+    @link "build/shim_demo_linux.o"
 }
 when os(macos) {
-    @link "../build/shim_demo_macos.o"
+    @link "build/shim_demo_macos.o"
 }
 when os(windows) {
-    @link "../build/shim_demo_win.obj"
+    @link "build/shim_demo_win.obj"
 }
 
 // minc -> C: a plain extern — the symbol comes from the linked object,

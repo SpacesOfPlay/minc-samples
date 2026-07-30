@@ -50,11 +50,15 @@ tree's `lib/` would shadow the installed compiler's.
 | `json_export.mc` | JSON writing |
 | `web_server.mc` | HTTP server |
 | `shim_demo.mc` | linking C code (see `build.sh shim`) |
+| `hotreload/` | hot-reload minc scripts into a running engine via libminc |
 
 Graphics examples read assets from `test/` relative to the cwd, so
 run them from the repo root. `lib/` holds shared helper headers some
 examples import (`frame_timer.mc`); everything else resolves against
 the installed compiler's own standard library.
+
+The hot-reload demo lives in its own folder because it is three files
+(engine, contract, script) — build steps in `hotreload/README.md`.
 
 ## Build script
 

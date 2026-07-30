@@ -188,16 +188,15 @@ float4 mc_blit_fs(McBlitVsOut input,
 }
 
 // ============================================================================
-// Simple xorshift64 PRNG
+// Marsaglia xorshift64 PRNG, shift triple (13, 7, 17)
 // ============================================================================
 
-i64 rng_state = 123456789;
+u64 rng_state = 123456789;
 
-i64 rng_next() {
+u64 rng_next() {
     rng_state = rng_state ^ (rng_state << 13);
     rng_state = rng_state ^ (rng_state >> 7);
     rng_state = rng_state ^ (rng_state << 17);
-    if rng_state < 0 { rng_state = 0 - rng_state; }
     return rng_state;
 }
 
@@ -210,7 +209,7 @@ f32 rng_range(f32 lo, f32 hi) {
 // Random int in [lo, hi)
 i32 rng_int(i32 lo, i32 hi) {
     if hi <= lo { return lo; }
-    return lo + cast(i32, rng_next() % cast(i64, hi - lo));
+    return lo + cast(i32, rng_next() % cast(u64, hi - lo));
 }
 
 // ============================================================================

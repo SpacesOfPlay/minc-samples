@@ -18,9 +18,11 @@ $BuildDir = Join-Path $ScriptDir "build"
 # Example .mc files sit at the repo root, next to this script.
 $ExamplesDir = $ScriptDir
 
-# minc: $env:MINC override, else PATH (installed toolchain), else
-# next to this script (manual zip layout).
+# minc: $env:MINC override (install dir, or a direct binary path),
+# else PATH (installed toolchain), else next to this script (manual
+# zip layout).
 $CC = $env:MINC
+if ($CC -and (Test-Path $CC -PathType Container)) { $CC = Join-Path $CC "minc.exe" }
 if (-not $CC) {
     $cmd = Get-Command minc -ErrorAction SilentlyContinue
     if ($cmd) { $CC = $cmd.Source }
@@ -28,7 +30,7 @@ if (-not $CC) {
 if (-not $CC) { $CC = Join-Path $ScriptDir "minc.exe" }
 
 if (-not (Test-Path $CC)) {
-    Write-Host "ERROR: minc not found. Install it (https://minc.dev) or set MINC to the binary." -ForegroundColor Red
+    Write-Host "ERROR: minc not found. Install it (https://minc.dev) or set MINC to the install dir." -ForegroundColor Red
     exit 1
 }
 if (-not (Test-Path $BuildDir)) { New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null }
