@@ -6,6 +6,7 @@
 #   ./build.sh chip8              — compile and launch CHIP-8 emulator
 #   ./build.sh missile            — compile and launch Missile Command
 #   ./build.sh sokol_cube         — compile and launch sokol cube demo
+#   ./build.sh hotreload [watch]  — compile and run the hot-reload demo
 #   ./build.sh wasm sokol_cube    — compile to wasm and open in browser
 #   ./build.sh bench              — run all benchmarks
 #   ./build.sh bench <name>       — run a single benchmark
@@ -669,6 +670,24 @@ case "$CMD" in
     sokol_compute)  build_sokol "sokol_compute" "$EXAMPLES_DIR/sokol_compute.mc" ;;
     sokol_mandelbrot) build_sokol "sokol_mandelbrot" "$EXAMPLES_DIR/sokol_mandelbrot.mc" ;;
     sphere_physics) build_sokol "sokol_sphere_physics" "$EXAMPLES_DIR/sokol_sphere_physics.mc" ;;
+    hotreload)
+        # The engine loads libminc (the embeddable JIT) at launch and
+        # its binary references it next to itself, so stage a copy from
+        # the install dir alongside the exe. Newer minc releases also
+        # fall back to the install dir on `minc run`, but the copy
+        # keeps this working with any minc.
+        exe="$BUILD_DIR/hotreload_engine"
+        echo -e "${CYAN}Compiling hotreload engine...${NC}"
+        "$CC" "$EXAMPLES_DIR/hotreload/engine.mc" -o "$exe"
+        chmod +x "$exe"
+        minc_dir="$(cd "$(dirname "$CC")" && pwd)"
+        cp -f "$minc_dir"/libminc.dylib "$minc_dir"/libminc.so "$BUILD_DIR/" 2>/dev/null || true
+        if [ ! -f "$BUILD_DIR/libminc.dylib" ] && [ ! -f "$BUILD_DIR/libminc.so" ]; then
+            echo -e "${YELLOW}warning: libminc not found next to minc ($minc_dir); the engine may fail to start${NC}"
+        fi
+        echo -e "${CYAN}Running hotreload engine${ARG:+ ($ARG)}...${NC}"
+        (cd "$EXAMPLES_DIR" && "$exe" $ARG)
+        ;;
     wasm)
         if [ -z "$ARG" ]; then
             echo -e "${YELLOW}Usage: ./build.sh wasm <example>${NC}"
@@ -729,6 +748,7 @@ case "$CMD" in
         echo "  sokol_compute      Compile and launch compute shader demo"
         echo "  sokol_mandelbrot   Compile and launch fragment-shader Mandelbrot"
         echo "  sphere_physics     Compile and launch bouncing-spheres demo"
+        echo "  hotreload [watch]  Compile and run the hot-reload demo (watch = live editing)"
         echo "  wasm <example>     Compile to wasm and open in browser"
         echo "                     (any example .mc that uses sokol_app;"
         echo "                      verified: sokol_cube, sokol_texcube,"

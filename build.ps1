@@ -3,6 +3,7 @@
 #   .\build.ps1 hello              — compile and run hello.mc
 #   .\build.ps1 raytracer          — compile and launch raytracer
 #   .\build.ps1 sokol_cube         — compile and launch sokol cube demo
+#   .\build.ps1 hotreload [watch]  — compile and run the hot-reload demo
 #   .\build.ps1 wasm sokol_cube    — compile to wasm and open in browser
 #   .\build.ps1 bench [filter]     — run benchmarks
 #   .\build.ps1 compile <file.mc>  — compile a .mc file
@@ -255,6 +256,24 @@ switch ($Command) {
     "sokol_compute"  { Build-Sokol "sokol_compute"         (Join-Path $ExamplesDir "sokol_compute.mc") }
     "sokol_mandelbrot" { Build-Sokol "sokol_mandelbrot"    (Join-Path $ExamplesDir "sokol_mandelbrot.mc") }
     "sphere_physics" { Build-Sokol "sokol_sphere_physics"  (Join-Path $ExamplesDir "sokol_sphere_physics.mc") }
+    "hotreload" {
+        # The engine loads libminc.dll (the embeddable JIT) at launch.
+        # An installed minc resolves it via PATH; stage a copy next to
+        # the exe so the MINC-override and manual-zip layouts work too.
+        $exe = Join-Path $BuildDir "hotreload_engine.exe"
+        Write-Host "Compiling hotreload engine..." -ForegroundColor Cyan
+        & $CC (Join-Path $ExamplesDir "hotreload\engine.mc") -o $exe
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $mincDir = Split-Path -Parent $CC
+        $dll = Join-Path $mincDir "libminc.dll"
+        if (Test-Path $dll) { Copy-Item $dll $BuildDir -Force }
+        Write-Host "Running hotreload engine..." -ForegroundColor Cyan
+        Push-Location $ExamplesDir
+        try {
+            if ($Arg) { & $exe $Arg } else { & $exe }
+        } finally { Pop-Location }
+        exit $LASTEXITCODE
+    }
     "wasm" {
         if (-not $Arg) {
             Write-Host "Usage: .\build.ps1 wasm <example>" -ForegroundColor Yellow
@@ -312,6 +331,7 @@ switch ($Command) {
         Write-Host "  sokol_compute      Compile and launch compute shader demo"
         Write-Host "  sokol_mandelbrot   Compile and launch fragment-shader Mandelbrot"
         Write-Host "  sphere_physics     Compile and launch bouncing-spheres demo"
+        Write-Host "  hotreload [watch]  Compile and run the hot-reload demo (watch = live editing)"
         Write-Host "  wasm <example>     Compile to wasm and open in browser"
         Write-Host "                     (any .mc in examples\ that uses sokol_app;"
         Write-Host "                      verified: sokol_cube, sokol_texcube,"
