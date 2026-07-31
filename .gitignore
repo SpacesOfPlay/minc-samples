@@ -1,0 +1,18 @@
+# Ignore extensionless files dropped in the repo root
+/*
+!/*/
+!/*.*
+
+build/
+*.exe
+*.exe.old
+*.pdb
+*.obj
+*.o
+*.wasm
+
+# Shader live-reload temp file
+.minc_shader_watch.mshe
+
+hotreload_live.mc
+hotreload_engine.wasm
