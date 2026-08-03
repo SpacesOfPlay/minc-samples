@@ -18,19 +18,28 @@ world untouched. No state migration, no stale pointers.
 
 ## Build & run
 
-In a minc-samples checkout (installed minc):
+In a minc-samples checkout (installed minc), from the checkout root:
 
+```
+./build.sh hotreload            # automated demo   (.\build.ps1 on Windows)
+./build.sh hotreload watch      # live: edit script.mc + save
+```
+
+or directly:
+
+```
+minc run hotreload/engine.mc
+```
+
+`minc run` resolves libminc from the install dir (Windows via PATH,
+macOS/Linux via the run fallback). A binary built with `-o` and run
+by hand needs libminc next to it on macOS/Linux — copy it once:
 ```
 cd hotreload
 minc engine.mc -o hotreload_engine.exe
+cp "$(dirname "$(command -v minc)")"/libminc.* .
 ./hotreload_engine.exe          # automated demo
 ./hotreload_engine.exe watch    # live: edit script.mc + save
-```
-
-On macOS / Linux copy libminc next to the engine binary first —
-Windows resolves libminc.dll from the install dir on PATH:
-```
-cp "$(dirname "$(command -v minc)")"/libminc.* .
 ```
 
 The automated demo runs script v1, "edits" it to v2, and verifies the

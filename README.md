@@ -22,15 +22,10 @@ git clone https://github.com/SpacesOfPlay/minc-samples
 cd minc-samples
 minc run hello.mc
 minc run sokol_cube.mc
-minc run raytracer.mc
 ```
 
 `minc run` compiles to a temp file and launches it in one step.
 `minc build <file.mc> -o <out>` produces a standalone executable.
-
-Don't clone this repo inside another minc source tree — imports
-resolve against the nearest `lib/` on the cwd path, and a parent
-tree's `lib/` would shadow the installed compiler's.
 
 ## Examples
 
@@ -55,10 +50,10 @@ tree's `lib/` would shadow the installed compiler's.
 Graphics examples read assets from `test/` relative to the cwd, so
 run them from the repo root. `lib/` holds shared helper headers some
 examples import (`frame_timer.mc`); everything else resolves against
-the installed compiler's own standard library.
+the installed compiler's standard library.
 
 The hot-reload demo lives in its own folder because it is three files
-(engine, contract, script) — build steps in `hotreload/README.md`.
+(engine, contract, script). Build steps in `hotreload/README.md`.
 
 ## Build script
 
@@ -107,4 +102,4 @@ attached it boots the first available emulator.
 
 ## License
 
-MIT — see `LICENSE.md`. Build freely on these.
+MIT — see `LICENSE.md`.
