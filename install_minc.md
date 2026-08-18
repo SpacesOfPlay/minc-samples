@@ -23,5 +23,17 @@ Update any time (the install dir is on your PATH):
 minc_update
 ```
 
+# Uninstall minc
+
+Removes the toolchain, the PATH entry, and the VS Code extension:
+
+```
+# Windows
+powershell -c "irm minc.dev/uninstall.ps1 | iex"
+
+# macOS / Linux
+curl -fsSL https://minc.dev/uninstall | bash
+```
+
 - Samples: https://github.com/SpacesOfPlay/minc-samples
 - Docs: https://minc.dev/docs/
