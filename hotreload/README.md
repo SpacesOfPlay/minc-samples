@@ -18,11 +18,12 @@ world untouched. No state migration, no stale pointers.
 
 ## Build & run
 
-In a minc-samples checkout (installed minc), from the checkout root:
+In a minc-samples checkout (installed minc), from the checkout root
+(same on Windows, macOS, Linux):
 
 ```
-./build.sh hotreload            # automated demo   (.\build.ps1 on Windows)
-./build.sh hotreload watch      # live: edit script.mc + save
+minc run hotreload            # automated demo
+minc run hotreload watch      # live: edit script.mc + save
 ```
 
 or directly:
