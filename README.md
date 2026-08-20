@@ -22,6 +22,7 @@ git clone https://github.com/SpacesOfPlay/minc-samples
 cd minc-samples
 minc run hello.mc
 minc run sokol_cube.mc
+minc run raytracer.mc
 ```
 
 `minc run` compiles to a temp file and launches it in one step.
@@ -44,7 +45,7 @@ minc run sokol_cube.mc
 | `audio_sine.mc`, `audio_push.mc` | audio output |
 | `json_export.mc` | JSON writing |
 | `web_server.mc` | HTTP server |
-| `shim_demo.mc` | linking C code (see `build.sh shim`) |
+| `shim_demo.mc` | linking C code (`minc run shim_demo.mc`, needs a C compiler) |
 | `hotreload/` | hot-reload minc scripts into a running engine via libminc |
 
 Graphics examples read assets from `test/` relative to the cwd, so
@@ -57,20 +58,28 @@ The hot-reload demo lives in its own folder because it is three files
 
 ## Build script
 
-`build.sh` (macOS / Linux) and `build.ps1` (Windows) wrap the less
-one-liner-able flows. The compiler is found on PATH; set `MINC` to
-point at a specific binary.
+This folder is a minc project: `build.mc` scripts the builds, and the
+`minc` verbs drive it (same on Windows, macOS, and Linux). The compiler
+is found on PATH; set `MINC` to point at an install dir or binary.
 
 ```
-./build.sh bench                   # benchmark suite vs a reference C compiler
-./build.sh bench matmul            # single benchmark
-./build.sh shim                    # C-interop demo (needs a C compiler)
-./build.sh wasm sokol_cube         # compile to wasm, open in browser
-./build.sh macos-app sokol_cube    # .app bundle (macOS host)
-./build.sh ios-sim sokol_cube      # iOS simulator (macOS host)
-./build.sh ios sokol_cube          # iOS device (macOS host)
-./build.sh android sokol_cube      # Android APK + install + launch
+minc run                       # list the examples
+minc run sokol_cube            # build + run an example
+minc build sokol_cube          # compile only
+minc bench                     # benchmark suite vs a reference C compiler
+minc bench matmul              # single benchmark
+minc run shim_demo.mc          # C-interop demo (needs a C compiler)
+minc wasm sokol_cube           # compile to wasm, open in browser
+minc run hotreload watch       # hot-reload demo with live editing
+minc run macos-app sokol_cube  # .app bundle (macOS host)
+minc run ios-sim sokol_cube    # iOS simulator (macOS host)
+minc run ios sokol_cube        # iOS device (macOS host)
+minc run android sokol_cube    # Android APK + install + launch
+minc clean
 ```
+
+`minc build <platform> <example>` packages without installing or
+launching.
 
 ### iOS (macOS host)
 
@@ -81,7 +90,7 @@ Apple Developer account:
 2. Build any iOS app in Xcode once to generate a wildcard
    provisioning profile.
 3. `export MINC_TEAM_ID=YOUR_TEAM_ID` (persist it in `~/.zprofile`).
-4. `./build.sh ios sokol_cube`
+4. `minc run ios sokol_cube`
 
 Set `MINC_BUNDLE_PREFIX=com.yourcompany` to override the default
 `com.minc` bundle-id prefix.
@@ -94,7 +103,7 @@ Needs an Android SDK with NDK plus a JDK for APK packaging:
 sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 sdkmanager "ndk;27.2.12479018"
 export ANDROID_HOME=~/Library/Android/sdk   # macOS default; Linux: ~/Android/Sdk
-./build.sh android sokol_cube
+minc run android sokol_cube
 ```
 
 The script auto-detects JDK, NDK, and build tools; with no device
