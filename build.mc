@@ -200,7 +200,9 @@ when os(windows) {
     // generated batch file. Returns cl's exit code, or -1 with no
     // MSVC install.
     i32 run_cl(str vcvarsall, str cl_args) {
-        string bat = str_concat("build/_cl_", "run.bat");
+        // cmd.exe splits an unquoted command token at '/', so the bat
+        // path must use backslashes.
+        string bat = str_concat("build\\_cl_", "run.bat");
         defer free(bat);
         str batp = str_from(bat.data, bat.len);
         str_buf b;
@@ -208,7 +210,7 @@ when os(windows) {
         defer str_buf_free(&b);
         str_buf_add(&b, "@call \"");
         str_buf_add(&b, vcvarsall);
-        str_buf_add(&b, "\" x64 >nul\r\ncl /nologo ");
+        str_buf_add(&b, "\" x64 >nul 2>&1\r\ncl /nologo ");
         str_buf_add(&b, cl_args);
         str_buf_add(&b, " >nul 2>&1\r\n");
         if !file_write_str(batp, str_buf_to_str(&b)) { return -1; }
