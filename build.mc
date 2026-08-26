@@ -1,8 +1,8 @@
 // build.mc — build (and run) the minc samples.
 //
 // Usage, from this folder:
-//   minc run <example>           build + run (sokol_cube, raytracer, ...)
-//   minc run <file.mc>           build + run your own program
+//   minc run <example> [args]    build + run (sokol_cube, raytracer, ...)
+//   minc run <file.mc> [args]    build + run your own program
 //   minc run                     list the examples
 //   minc build <example>         compile only
 //   minc wasm <example>          build + serve in the browser
@@ -14,6 +14,8 @@
 //   minc clean
 //
 // `build` with a platform word packages without installing/launching.
+// Arguments after the example name go to the program:
+// `minc run web_server --port 9090`.
 // Special cases: `minc run shim_demo.mc` compiles the C shim first
 // (needs a C compiler); `minc run hotreload [watch]` runs the
 // hot-reload demo.
@@ -21,11 +23,11 @@
 // The minc compiler is taken from MINC, then PATH, then this folder.
 // Install minc from https://minc.dev.
 
-@minc_min_version "0.9.11"
+@minc_min_version "0.9.12"
 
 // Older minc ignores the tag above; this forces a clear error there.
-when !defined(MINC_VERSION) || MINC_VERSION < 9011 {
-    minc_0_9_11_or_newer_required please_update_minc;
+when !defined(MINC_VERSION) || MINC_VERSION < 9012 {
+    minc_0_9_12_or_newer_required please_update_minc;
 }
 
 import process;
@@ -36,20 +38,8 @@ import zip;
 when os(windows) { str EXE_SUFFIX = ".exe"; }
 when os(linux) || os(macos) { str EXE_SUFFIX = ""; }
 
-void out(str s) {
-    write(stdout(), s.data, s.len);
-    return;
-}
-
-void say(str s) {
-    out(s);
-    write(stdout(), "\n", 1);
-    return;
-}
-
 void die(str s) {
-    write(stderr(), s.data, s.len);
-    write(stderr(), "\n", 1);
+    eprint("{}\n", s);
     exit(1);
     return;
 }
@@ -58,7 +48,7 @@ void die(str s) {
 string join_named(str dir, str name, str ext) {
     string base = str_concat(name, ext);
     defer free(base);
-    return path_join(dir, str_from(base.data, base.len));
+    return path_join(dir, base);
 }
 
 // MINC first (an install dir or the binary itself), then PATH, then a
@@ -66,9 +56,8 @@ string join_named(str dir, str name, str ext) {
 string find_minc() {
     string env = env_get("MINC");
     if env.len > 0 {
-        str e = str_from(env.data, env.len);
-        if path_is_dir(e) {
-            string cand = join_named(e, "minc", EXE_SUFFIX);
+        if path_is_dir(env) {
+            string cand = join_named(env, "minc", EXE_SUFFIX);
             free(env);
             return cand;
         }
@@ -81,7 +70,7 @@ string find_minc() {
     free(onpath);
 
     string local = str_concat("./minc", EXE_SUFFIX);
-    if path_exists(str_from(local.data, local.len)) { return local; }
+    if path_exists(local) { return local; }
     free(local);
 
     return string{};
@@ -110,31 +99,30 @@ str resolve_alias(str name) {
 // A name means "<name>.mc" next to this script; a .mc path is taken as
 // given. Returns an owned path or empty when nothing matches.
 string resolve_source(str target) {
-    if str_ends_with(target, ".mc") { return str_concat(target, ""); }
+    if str_ends_with(target, ".mc") { return string(target); }
     str name = resolve_alias(target);
     string cand = str_concat(name, ".mc");
-    if path_exists(str_from(cand.data, cand.len)) { return cand; }
+    if path_exists(cand) { return cand; }
     free(cand);
     return string{};
 }
 
 void list_examples() {
-    say("Examples in this folder:");
+    print("Examples in this folder:\n");
     DirList l = dir_list(".", ".mc", false);
     defer dir_list_free(&l);
     for i32 i = 0; i < l.count; i++ {
         str stem = path_stem(l.items[i]);
         if str_equal(stem, "build") { continue; }   // this script
-        out("  ");
-        say(stem);
+        print("  {}\n", stem);
     }
-    say("  hotreload            (hot-reload demo; add `watch` for live editing)");
-    say("");
-    say("Usage:");
-    say("  minc run <example>          minc wasm <example>");
-    say("  minc build <example>        minc bench [filter]");
-    say("  minc run ios|ios-sim|android|macos-app <example>");
-    say("  minc clean");
+    print("  hotreload            (hot-reload demo; add `watch` for live editing)\n"
+          "\n"
+          "Usage:\n"
+          "  minc run <example>          minc wasm <example>\n"
+          "  minc build <example>        minc bench [filter]\n"
+          "  minc run ios|ios-sim|android|macos-app <example>\n"
+          "  minc clean\n");
     return;
 }
 
@@ -167,16 +155,15 @@ when os(windows) {
     string find_vcvarsall() {
         string pf = env_get("ProgramFiles(x86)");
         if pf.len == 0 { return string{}; }
-        string vsw = path_join(str_from(pf.data, pf.len),
+        string vsw = path_join(pf,
                                "Microsoft Visual Studio\\Installer\\vswhere.exe");
         free(pf);
         defer free(vsw);
-        str vswp = str_from(vsw.data, vsw.len);
-        if !path_exists(vswp) { return string{}; }
+        if !path_exists(vsw) { return string{}; }
 
         for i32 pass = 0; pass < 2; pass++ {
             ProcCmd c = { .args = {
-                vswp, "-latest", "-products", "*",
+                vsw, "-latest", "-products", "*",
                 "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
                 "-property", "installationPath"
             }, .capture = true };
@@ -184,11 +171,10 @@ when os(windows) {
             ProcResult r = proc_run(&c);
             defer proc_result_free(&r);
             if r.exit_code == 0 && r.out.len > 0 {
-                str line = str_trim(str_from(r.out.data, r.out.len));
+                str line = str_trim(r.out);
                 if line.len > 0 {
                     string bat = path_join(line, "VC\\Auxiliary\\Build\\vcvarsall.bat");
-                    str batp = str_from(bat.data, bat.len);
-                    if path_exists(batp) { return bat; }
+                    if path_exists(bat) { return bat; }
                     free(bat);
                 }
             }
@@ -202,19 +188,12 @@ when os(windows) {
     i32 run_cl(str vcvarsall, str cl_args) {
         // cmd.exe splits an unquoted command token at '/', so the bat
         // path must use backslashes.
-        string bat = str_concat("build\\_cl_", "run.bat");
-        defer free(bat);
-        str batp = str_from(bat.data, bat.len);
-        str_buf b;
-        str_buf_init(&b);
-        defer str_buf_free(&b);
-        str_buf_add(&b, "@call \"");
-        str_buf_add(&b, vcvarsall);
-        str_buf_add(&b, "\" x64 >nul 2>&1\r\ncl /nologo ");
-        str_buf_add(&b, cl_args);
-        str_buf_add(&b, " >nul 2>&1\r\n");
-        if !file_write_str(batp, str_buf_to_str(&b)) { return -1; }
-        ProcCmd c = { .args = { "cmd.exe", "/c", batp } };
+        str bat = "build\\_cl_run.bat";
+        string script = format("@call \"{}\" x64 >nul 2>&1\r\n"
+                               "cl /nologo {} >nul 2>&1\r\n", vcvarsall, cl_args);
+        defer free(script);
+        if !file_write_str(bat, script) { return -1; }
+        ProcCmd c = { .args = { "cmd.exe", "/c", bat } };
         return run_cmd(&c);
     }
 }
@@ -299,7 +278,7 @@ private string fmt_ratio(i64 mc, i64 ref) {
     if h % 100 < 10 {
         return format("{}.0{}x", h / 100, h % 100);
     }
-    return format("{}.{}x", h / 100, str_from(frac.data, frac.len));
+    return format("{}.{}x", h / 100, frac);
 }
 
 private void bench_row(str name, str mc_t, str ref_t, str ratio,
@@ -320,7 +299,7 @@ private void bench_row(str name, str mc_t, str ref_t, str ratio,
     col_r(&b, ref_kb, 10);
     str_buf_add_byte(&b, ' ');
     str_buf_add(&b, result);
-    say(str_buf_to_str(&b));
+    print("{}\n", str_buf_to_str(&b));
     return;
 }
 
@@ -339,9 +318,9 @@ private bool bench_run_exe(str exe, string* out_val, i64* out_time) {
     ProcResult r = proc_run(&c);
     defer proc_result_free(&r);
     if !r.spawned || r.out.len == 0 { return false; }
-    str o = str_from(r.out.data, r.out.len);
+    str o = r.out;
     str val = token_after(o, "result=");
-    *out_val = str_concat(val, "");
+    *out_val = string(val);
     str t = token_after(o, "time=");
     i64 tv = 0;
     ignore parse_i64(t, &tv);
@@ -367,13 +346,10 @@ i32 do_bench(str filter) {
             }
         }
         if nb == 0 {
-            out("No benchmark matches '");
-            out(filter);
-            say("'.");
-            say("Available benchmarks:");
+            print("No benchmark matches '{}'.\n", filter);
+            print("Available benchmarks:\n");
             for i32 i = 0; i < nall; i++ {
-                out("  ");
-                say(all[i]);
+                print("  {}\n", all[i]);
             }
             return 1;
         }
@@ -389,7 +365,7 @@ i32 do_bench(str filter) {
     when os(linux) || os(macos) {
         ref_cc = find_ref_cc();
         if ref_cc.len > 0 {
-            ref_name = path_stem(str_from(ref_cc.data, ref_cc.len));
+            ref_name = path_stem(ref_cc);
         }
     }
     when os(windows) {
@@ -398,24 +374,17 @@ i32 do_bench(str filter) {
     }
     bool has_ref = ref_cc.len > 0;
 
-    say("=== minc benchmark suite ===");
-    out("Compiler: ");
-    say(g_cc);
+    print("=== minc benchmark suite ===\n");
+    print("Compiler: {}\n", g_cc);
     if has_ref {
-        out("Reference: ");
-        out(ref_name);
-        say(" -O2");
+        print("Reference: {} -O2\n", ref_name);
     } else {
-        say("Reference: not found (minc-only mode)");
+        print("Reference: not found (minc-only mode)\n");
     }
     if filter.len > 0 {
-        out("Filter:   ");
-        out(filter);
-        string n = format(" ({} matched)", nb);
-        defer free(n);
-        say(str_from(n.data, n.len));
+        print("Filter:   {} ({} matched)\n", filter, nb);
     }
-    say("");
+    print("\n");
     bench_row("Benchmark", "minc (us)", "ref (us)", "Ratio", "minc (KB)", "ref (KB)", "Result");
     bench_row("---------", "---------", "--------", "-----", "---------", "--------", "------");
 
@@ -427,18 +396,14 @@ i32 do_bench(str filter) {
         str name = benches[bi];
         string mc_src = format("bench/bench_{}.mc", name);
         defer free(mc_src);
-        string mc_exe_s = format("build/bench_{}_minc{}", name, EXE_SUFFIX);
-        defer free(mc_exe_s);
-        str mc_exe = str_from(mc_exe_s.data, mc_exe_s.len);
+        string mc_exe = format("build/bench_{}_minc{}", name, EXE_SUFFIX);
+        defer free(mc_exe);
         string c_src = format("bench/bench_{}.c", name);
         defer free(c_src);
-        string c_exe_s = format("build/bench_{}_ref{}", name, EXE_SUFFIX);
-        defer free(c_exe_s);
-        str c_exe = str_from(c_exe_s.data, c_exe_s.len);
+        string c_exe = format("build/bench_{}_ref{}", name, EXE_SUFFIX);
+        defer free(c_exe);
 
-        ProcCmd mcc = { .args = {
-            g_cc, str_from(mc_src.data, mc_src.len), "-o", mc_exe
-        }, .capture = true };
+        ProcCmd mcc = { .args = { g_cc, mc_src, "-o", mc_exe }, .capture = true };
         ProcResult mcr = proc_run(&mcc);
         i32 mc_rc = mcr.exit_code;
         proc_result_free(&mcr);
@@ -449,47 +414,40 @@ i32 do_bench(str filter) {
         string mc_kb = fmt_kb(file_stamp(mc_exe).size);
         defer free(mc_kb);
 
-        string ref_kb_s = str_concat("-", "");
-        defer free(ref_kb_s);
+        string ref_kb = string("-");
+        defer free(ref_kb);
         if has_ref {
             bool built = false;
             when os(linux) || os(macos) {
-                ProcCmd rc = { .args = {
-                    str_from(ref_cc.data, ref_cc.len), "-O2", "-fwrapv"
-                }, .capture = true };
+                ProcCmd rc = { .args = { ref_cc, "-O2", "-fwrapv" }, .capture = true };
                 if bench_is_float(name) { proc_arg(&rc, "-ffp-contract=off"); }
                 proc_arg(&rc, "-o");
                 proc_arg(&rc, c_exe);
-                proc_arg(&rc, str_from(c_src.data, c_src.len));
+                proc_arg(&rc, c_src);
                 proc_arg(&rc, "-lm");
                 ProcResult rr = proc_run(&rc);
                 built = rr.exit_code == 0;
                 proc_result_free(&rr);
             }
             when os(windows) {
-                string args = format("/O2 /Fo:\"build\\\\\" /Fe:\"{}\" \"{}\"",
-                                     c_exe, str_from(c_src.data, c_src.len));
+                string args = format("/O2 /Fo:\"build\\\\\" /Fe:\"{}\" \"{}\"", c_exe, c_src);
                 defer free(args);
-                ignore run_cl(str_from(ref_cc.data, ref_cc.len),
-                              str_from(args.data, args.len));
+                ignore run_cl(ref_cc, args);
                 built = true;
             }
             if !built || !path_exists(c_exe) {
-                bench_row(name, "-", "CERR", "-",
-                          str_from(mc_kb.data, mc_kb.len), "-", "ref compile failed");
+                bench_row(name, "-", "CERR", "-", mc_kb, "-", "ref compile failed");
                 continue;
             }
-            free(ref_kb_s);
-            ref_kb_s = fmt_kb(file_stamp(c_exe).size);
+            free(ref_kb);
+            ref_kb = fmt_kb(file_stamp(c_exe).size);
         }
-        str ref_kb = str_from(ref_kb_s.data, ref_kb_s.len);
 
         string mc_val = string{};
         defer free(mc_val);
         i64 mc_time = 0;
         if !bench_run_exe(mc_exe, &mc_val, &mc_time) {
-            bench_row(name, "FAIL", "-", "-",
-                      str_from(mc_kb.data, mc_kb.len), ref_kb, "minc runtime error");
+            bench_row(name, "FAIL", "-", "-", mc_kb, ref_kb, "minc runtime error");
             continue;
         }
         string mc_t = format("{}", mc_time);
@@ -498,10 +456,9 @@ i32 do_bench(str filter) {
         if !has_ref {
             total_minc = total_minc + mc_time;
             nbench++;
-            string res = format("OK (result={})", str_from(mc_val.data, mc_val.len));
+            string res = format("OK (result={})", mc_val);
             defer free(res);
-            bench_row(name, str_from(mc_t.data, mc_t.len), "-", "-",
-                      str_from(mc_kb.data, mc_kb.len), "-", str_from(res.data, res.len));
+            bench_row(name, mc_t, "-", "-", mc_kb, "-", res);
             continue;
         }
 
@@ -509,21 +466,18 @@ i32 do_bench(str filter) {
         defer free(ref_val);
         i64 ref_time = 0;
         if !bench_run_exe(c_exe, &ref_val, &ref_time) {
-            bench_row(name, str_from(mc_t.data, mc_t.len), "FAIL", "-",
-                      str_from(mc_kb.data, mc_kb.len), ref_kb, "ref runtime error");
+            bench_row(name, mc_t, "FAIL", "-", mc_kb, ref_kb, "ref runtime error");
             continue;
         }
         string ref_t = format("{}", ref_time);
         defer free(ref_t);
 
         // Same result, or integer results within tolerance.
-        bool result_ok = str_equal(str_from(mc_val.data, mc_val.len),
-                                   str_from(ref_val.data, ref_val.len));
+        bool result_ok = str_equal(mc_val, ref_val);
         if !result_ok {
             i64 a = 0;
             i64 b = 0;
-            if parse_i64(str_from(mc_val.data, mc_val.len), &a) &&
-               parse_i64(str_from(ref_val.data, ref_val.len), &b) {
+            if parse_i64(mc_val, &a) && parse_i64(ref_val, &b) {
                 i64 diff = a - b;
                 if diff < 0 { diff = 0 - diff; }
                 i64 tol = 1;
@@ -532,17 +486,13 @@ i32 do_bench(str filter) {
             }
         }
         if !result_ok {
-            string mm = format("MISMATCH! minc={} ref={}",
-                               str_from(mc_val.data, mc_val.len),
-                               str_from(ref_val.data, ref_val.len));
+            string mm = format("MISMATCH! minc={} ref={}", mc_val, ref_val);
             defer free(mm);
-            bench_row(name, str_from(mc_t.data, mc_t.len), str_from(ref_t.data, ref_t.len),
-                      "-", str_from(mc_kb.data, mc_kb.len), ref_kb,
-                      str_from(mm.data, mm.len));
+            bench_row(name, mc_t, ref_t, "-", mc_kb, ref_kb, mm);
             continue;
         }
 
-        string ratio = str_concat("-", "");
+        string ratio = string("-");
         defer free(ratio);
         if ref_time > 0 {
             free(ratio);
@@ -551,12 +501,10 @@ i32 do_bench(str filter) {
             total_ref = total_ref + ref_time;
             nbench++;
         }
-        bench_row(name, str_from(mc_t.data, mc_t.len), str_from(ref_t.data, ref_t.len),
-                  str_from(ratio.data, ratio.len), str_from(mc_kb.data, mc_kb.len),
-                  ref_kb, "OK");
+        bench_row(name, mc_t, ref_t, ratio, mc_kb, ref_kb, "OK");
     }
 
-    say("");
+    print("\n");
     if has_ref && nbench > 0 && total_ref > 0 {
         string tm = format("{}", total_minc);
         defer free(tm);
@@ -564,12 +512,9 @@ i32 do_bench(str filter) {
         defer free(tr);
         string avg = fmt_ratio(total_minc, total_ref);
         defer free(avg);
-        bench_row("TOTAL", str_from(tm.data, tm.len), str_from(tr.data, tr.len),
-                  str_from(avg.data, avg.len), "", "", "");
+        bench_row("TOTAL", tm, tr, avg, "", "", "");
     } else if nbench > 0 {
-        string t = format("Total time: {} us (across {} benchmarks)", total_minc, nbench);
-        defer free(t);
-        say(str_from(t.data, t.len));
+        print("Total time: {} us (across {} benchmarks)\n", total_minc, nbench);
     }
     return 0;
 }
@@ -582,16 +527,15 @@ void build_shim_object() {
     when os(windows) {
         str obj = "build/shim_demo_win.obj";
         ignore file_remove(obj);
-        say("Compiling C shim...");
+        print("Compiling C shim...\n");
         // 1. MSVC cl. /GS- drops the stack cookie the freestanding
         //    object cannot resolve.
         string vcv = find_vcvarsall();
         defer free(vcv);
         if vcv.len > 0 {
-            ignore run_cl(str_from(vcv.data, vcv.len),
-                          "/c /GS- /Fo:\"build/shim_demo_win.obj\" \"shim_demo.c\"");
+            ignore run_cl(vcv, "/c /GS- /Fo:\"build/shim_demo_win.obj\" \"shim_demo.c\"");
             if path_exists(obj) {
-                say("  (cl)");
+                print("  (cl)\n");
                 return;
             }
         }
@@ -600,12 +544,11 @@ void build_shim_object() {
         defer free(clang);
         if clang.len > 0 {
             ProcCmd c = { .args = {
-                str_from(clang.data, clang.len), "-c", "-fno-stack-protector",
-                "shim_demo.c", "-o", obj
+                clang, "-c", "-fno-stack-protector", "shim_demo.c", "-o", obj
             } };
             ignore run_cmd(&c);
             if path_exists(obj) {
-                say("  (clang)");
+                print("  (clang)\n");
                 return;
             }
         }
@@ -614,12 +557,12 @@ void build_shim_object() {
         defer free(zig);
         if zig.len > 0 {
             ProcCmd c = { .args = {
-                str_from(zig.data, zig.len), "cc", "-c", "-fno-stack-protector",
+                zig, "cc", "-c", "-fno-stack-protector",
                 "-target", "x86_64-windows-msvc", "shim_demo.c", "-o", obj
             } };
             ignore run_cmd(&c);
             if path_exists(obj) {
-                say("  (zig cc)");
+                print("  (zig cc)\n");
                 return;
             }
         }
@@ -631,10 +574,9 @@ void build_shim_object() {
         if cc.len == 0 { die("shim demo needs a C compiler (gcc or clang) on PATH"); }
         str obj = "build/shim_demo_macos.o";
         when os(linux) { obj = "build/shim_demo_linux.o"; }
-        say("Compiling C shim...");
+        print("Compiling C shim...\n");
         ProcCmd c = { .args = {
-            str_from(cc.data, cc.len), "-c", "-fno-stack-protector",
-            "shim_demo.c", "-o", obj
+            cc, "-c", "-fno-stack-protector", "shim_demo.c", "-o", obj
         } };
         when os(linux) { proc_arg(&c, "-fno-pie"); }
         if run_cmd(&c) != 0 || !path_exists(obj) { die("C shim compile failed"); }
@@ -650,10 +592,9 @@ void build_shim_object() {
 i32 run_hotreload(bool watch) {
     string exe = join_named("build", "hotreload_engine", EXE_SUFFIX);
     defer free(exe);
-    str exep = str_from(exe.data, exe.len);
-    say("Compiling hotreload engine...");
-    ProcCmd c = { .args = { g_cc, "hotreload/engine.mc", "-o", exep } };
-    if run_cmd(&c) != 0 || !path_exists(exep) { die("minc compile failed"); }
+    print("Compiling hotreload engine...\n");
+    ProcCmd c = { .args = { g_cc, "hotreload/engine.mc", "-o", exe } };
+    if run_cmd(&c) != 0 || !path_exists(exe) { die("minc compile failed"); }
 
     str cc_dir = path_dirname(g_cc);
     str libname = "libminc.so";
@@ -663,14 +604,14 @@ i32 run_hotreload(bool watch) {
     defer free(lsrc);
     string ldst = path_join("build", libname);
     defer free(ldst);
-    if path_exists(str_from(lsrc.data, lsrc.len)) {
-        ignore file_copy(str_from(lsrc.data, lsrc.len), str_from(ldst.data, ldst.len));
-    } else if !path_exists(str_from(ldst.data, ldst.len)) {
-        say("warning: libminc not found next to minc; the engine may fail to start");
+    if path_exists(lsrc) {
+        ignore file_copy(lsrc, ldst);
+    } else if !path_exists(ldst) {
+        print("warning: libminc not found next to minc; the engine may fail to start\n");
     }
 
-    say("Running hotreload engine...");
-    ProcCmd run = { .args = { exep } };
+    print("Running hotreload engine...\n");
+    ProcCmd run = { .args = { exe } };
     if watch { proc_arg(&run, "watch"); }
     return run_cmd(&run);
 }
@@ -685,8 +626,7 @@ string capture_out(ProcCmd* c) {
     if !r.spawned || r.exit_code != 0 {
         return string{};
     }
-    str t = str_trim(str_from(r.out.data, r.out.len));
-    return str_concat(t, "");
+    return string(str_trim(r.out));
 }
 
 // The next line of s starting at *pos; advances *pos past it.
@@ -707,7 +647,7 @@ string bundle_id_for(str name) {
     string prefix = env_get("MINC_BUNDLE_PREFIX");
     defer free(prefix);
     str p = "com.minc";
-    if prefix.len > 0 { p = str_from(prefix.data, prefix.len); }
+    if prefix.len > 0 { p = prefix; }
     str_buf b;
     str_buf_init(&b);
     defer str_buf_free(&b);
@@ -718,7 +658,7 @@ string bundle_id_for(str name) {
         if c == '_' { c = '-'; }
         str_buf_add_byte(&b, c);
     }
-    return str_concat(str_buf_to_str(&b), "");
+    return string(str_buf_to_str(&b));
 }
 
 bool is_media_asset(str name) {
@@ -743,7 +683,7 @@ void stage_assets_dir(str src_dir, str dst_dir) {
         defer free(s);
         string d = path_join(dst_dir, files.items[i]);
         defer free(d);
-        ignore file_copy(str_from(s.data, s.len), str_from(d.data, d.len));
+        ignore file_copy(s, d);
     }
     DirList dirs = dir_list(src_dir, "", true);
     defer dir_list_free(&dirs);
@@ -752,7 +692,7 @@ void stage_assets_dir(str src_dir, str dst_dir) {
         defer free(s);
         string d = path_join(dst_dir, dirs.items[i]);
         defer free(d);
-        stage_assets_dir(str_from(s.data, s.len), str_from(d.data, d.len));
+        stage_assets_dir(s, d);
     }
     return;
 }
@@ -761,7 +701,7 @@ void stage_assets(str dst_root) {
     if !path_is_dir("test") { return; }
     string dst = path_join(dst_root, "test");
     defer free(dst);
-    stage_assets_dir("test", str_from(dst.data, dst.len));
+    stage_assets_dir("test", dst);
     return;
 }
 
@@ -773,12 +713,12 @@ void stage_bundle_binary(str app_dir, str sub, str exe, str name) {
     defer free(bin_dir);
     if sub.len == 0 {
         free(bin_dir);
-        bin_dir = str_concat(app_dir, "");
+        bin_dir = string(app_dir);
     }
-    if !dir_create(str_from(bin_dir.data, bin_dir.len)) { die("cannot create bundle dir"); }
-    string dst = path_join(str_from(bin_dir.data, bin_dir.len), name);
+    if !dir_create(bin_dir) { die("cannot create bundle dir"); }
+    string dst = path_join(bin_dir, name);
     defer free(dst);
-    if !file_copy(exe, str_from(dst.data, dst.len)) { die("cannot stage binary into bundle"); }
+    if !file_copy(exe, dst) { die("cannot stage binary into bundle"); }
     return;
 }
 
@@ -794,53 +734,45 @@ void compile_for_target(str src, str target, str exe) {
 }
 
 i32 do_macos_app(str name, str src, bool do_run, bool open_flag) {
-    out("Compiling ");
-    out(name);
-    say(" (macOS .app)...");
+    print("Compiling {} (macOS .app)...\n", name);
     string exe = join_named("build", name, "");
     defer free(exe);
-    compile_for_target(src, "macos", str_from(exe.data, exe.len));
+    compile_for_target(src, "macos", exe);
 
-    string app_s = format("build/{}.app", name);
-    defer free(app_s);
-    str app_dir = str_from(app_s.data, app_s.len);
+    string app_dir = format("build/{}.app", name);
+    defer free(app_dir);
     string bid = bundle_id_for(name);
     defer free(bid);
-    stage_bundle_binary(app_dir, "Contents/MacOS", str_from(exe.data, exe.len), name);
+    stage_bundle_binary(app_dir, "Contents/MacOS", exe, name);
 
-    str_buf p;
-    str_buf_init(&p);
-    defer str_buf_free(&p);
-    str_buf_add(&p, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    str_buf_add(&p, "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n");
-    str_buf_add(&p, "<plist version=\"1.0\"><dict>\n");
-    string kv = format("    <key>CFBundleExecutable</key><string>{}</string>\n    <key>CFBundleName</key><string>{}</string>\n    <key>CFBundleIdentifier</key><string>{}</string>\n",
-                       name, name, str_from(bid.data, bid.len));
-    str_buf_add(&p, str_from(kv.data, kv.len));
-    free(kv);
-    str_buf_add(&p, "    <key>CFBundleVersion</key><string>1</string>\n");
-    str_buf_add(&p, "    <key>CFBundleShortVersionString</key><string>1.0</string>\n");
-    str_buf_add(&p, "    <key>CFBundlePackageType</key><string>APPL</string>\n");
-    str_buf_add(&p, "    <key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>\n");
-    str_buf_add(&p, "    <key>LSMinimumSystemVersion</key><string>11.0</string>\n");
-    str_buf_add(&p, "    <key>NSHighResolutionCapable</key><true/>\n");
-    str_buf_add(&p, "</dict></plist>\n");
+    string p = format(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        "<plist version=\"1.0\"><dict>\n"
+        "    <key>CFBundleExecutable</key><string>{}</string>\n"
+        "    <key>CFBundleName</key><string>{}</string>\n"
+        "    <key>CFBundleIdentifier</key><string>{}</string>\n"
+        "    <key>CFBundleVersion</key><string>1</string>\n"
+        "    <key>CFBundleShortVersionString</key><string>1.0</string>\n"
+        "    <key>CFBundlePackageType</key><string>APPL</string>\n"
+        "    <key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>\n"
+        "    <key>LSMinimumSystemVersion</key><string>11.0</string>\n"
+        "    <key>NSHighResolutionCapable</key><true/>\n"
+        "</dict></plist>\n", name, name, bid);
+    defer free(p);
     string plist = path_join(app_dir, "Contents/Info.plist");
     defer free(plist);
-    if !file_write_str(str_from(plist.data, plist.len), str_buf_to_str(&p)) {
-        die("cannot write Info.plist");
-    }
+    if !file_write_str(plist, p) { die("cannot write Info.plist"); }
 
     string res = path_join(app_dir, "Contents/Resources");
     defer free(res);
-    stage_assets(str_from(res.data, res.len));
+    stage_assets(res);
 
     ProcCmd cs = { .args = { "codesign", "-s", "-", app_dir }, .capture = true };
     ignore run_cmd(&cs);
-    out("Bundle: ");
-    say(app_dir);
+    print("Bundle: {}\n", app_dir);
     if do_run || open_flag {
-        say("Launching...");
+        print("Launching...\n");
         ProcCmd op = { .args = { "open", app_dir } };
         return run_cmd(&op);
     }
@@ -869,7 +801,7 @@ string simctl_find_udid(str listing, str marker) {
         if open_at < 0 { continue; }
         str udid = str_slice(line, open_at + 1, close);
         if udid.len < 8 { continue; }
-        return str_concat(udid, "");
+        return string(udid);
     }
     return string{};
 }
@@ -879,18 +811,18 @@ string ensure_booted_sim() {
     ProcCmd lb = { .args = { "xcrun", "simctl", "list", "devices", "booted" } };
     string booted_list = capture_out(&lb);
     defer free(booted_list);
-    string udid = simctl_find_udid(str_from(booted_list.data, booted_list.len), "(Booted)");
+    string udid = simctl_find_udid(booted_list, "(Booted)");
     if udid.len > 0 { return udid; }
     free(udid);
 
     ProcCmd la = { .args = { "xcrun", "simctl", "list", "devices", "available" } };
     string avail = capture_out(&la);
     defer free(avail);
-    udid = simctl_find_udid(str_from(avail.data, avail.len), "(Shutdown)");
+    udid = simctl_find_udid(avail, "(Shutdown)");
     if udid.len == 0 { return udid; }
 
-    say("Booting simulator...");
-    ProcCmd boot = { .args = { "xcrun", "simctl", "boot", str_from(udid.data, udid.len) }, .capture = true };
+    print("Booting simulator...\n");
+    ProcCmd boot = { .args = { "xcrun", "simctl", "boot", udid }, .capture = true };
     ignore run_cmd(&boot);
     ProcCmd op = { .args = { "open", "-a", "Simulator" }, .capture = true };
     ignore run_cmd(&op);
@@ -899,47 +831,38 @@ string ensure_booted_sim() {
 }
 
 i32 do_ios_sim(str name, str src, bool do_run) {
-    out("Compiling ");
-    out(name);
-    say(" (iOS Simulator)...");
+    print("Compiling {} (iOS Simulator)...\n", name);
     string exe = join_named("build", name, "");
     defer free(exe);
-    compile_for_target(src, "ios-sim", str_from(exe.data, exe.len));
+    compile_for_target(src, "ios-sim", exe);
 
-    string app_s = format("build/{}.app", name);
-    defer free(app_s);
-    str app_dir = str_from(app_s.data, app_s.len);
+    string app_dir = format("build/{}.app", name);
+    defer free(app_dir);
     string bid = bundle_id_for(name);
     defer free(bid);
-    stage_bundle_binary(app_dir, "", str_from(exe.data, exe.len), name);
+    stage_bundle_binary(app_dir, "", exe, name);
 
-    str_buf p;
-    str_buf_init(&p);
-    defer str_buf_free(&p);
-    str_buf_add(&p, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    str_buf_add(&p, "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n");
-    str_buf_add(&p, "<plist version=\"1.0\"><dict>\n");
-    string kv = format("    <key>CFBundleExecutable</key><string>{}</string>\n    <key>CFBundleIdentifier</key><string>{}</string>\n",
-                       name, str_from(bid.data, bid.len));
-    str_buf_add(&p, str_from(kv.data, kv.len));
-    free(kv);
-    str_buf_add(&p, "    <key>CFBundleVersion</key><string>1</string>\n");
-    str_buf_add(&p, "    <key>CFBundleShortVersionString</key><string>1.0</string>\n");
-    str_buf_add(&p, "    <key>CFBundlePackageType</key><string>APPL</string>\n");
-    str_buf_add(&p, "    <key>MinimumOSVersion</key><string>15.0</string>\n");
-    str_buf_add(&p, "    <key>CFBundleSupportedPlatforms</key><array><string>iPhoneSimulator</string></array>\n");
-    str_buf_add(&p, "    <key>DTPlatformName</key><string>iphonesimulator</string>\n");
-    str_buf_add(&p, "</dict></plist>\n");
+    string p = format(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        "<plist version=\"1.0\"><dict>\n"
+        "    <key>CFBundleExecutable</key><string>{}</string>\n"
+        "    <key>CFBundleIdentifier</key><string>{}</string>\n"
+        "    <key>CFBundleVersion</key><string>1</string>\n"
+        "    <key>CFBundleShortVersionString</key><string>1.0</string>\n"
+        "    <key>CFBundlePackageType</key><string>APPL</string>\n"
+        "    <key>MinimumOSVersion</key><string>15.0</string>\n"
+        "    <key>CFBundleSupportedPlatforms</key><array><string>iPhoneSimulator</string></array>\n"
+        "    <key>DTPlatformName</key><string>iphonesimulator</string>\n"
+        "</dict></plist>\n", name, bid);
+    defer free(p);
     string plist = path_join(app_dir, "Info.plist");
     defer free(plist);
-    if !file_write_str(str_from(plist.data, plist.len), str_buf_to_str(&p)) {
-        die("cannot write Info.plist");
-    }
+    if !file_write_str(plist, p) { die("cannot write Info.plist"); }
     stage_assets(app_dir);
     ProcCmd cs = { .args = { "codesign", "-s", "-", app_dir }, .capture = true };
     ignore run_cmd(&cs);
-    out("Bundle: ");
-    say(app_dir);
+    print("Bundle: {}\n", app_dir);
     if !do_run { return 0; }
 
     string udid = ensure_booted_sim();
@@ -948,12 +871,9 @@ i32 do_ios_sim(str name, str src, bool do_run) {
     ProcCmd inst = { .args = { "xcrun", "simctl", "install", "booted", app_dir } };
     if run_cmd(&inst) != 0 { die("simctl install failed"); }
     thread_sleep(1000);
-    ProcCmd launch = { .args = {
-        "xcrun", "simctl", "launch", "booted", str_from(bid.data, bid.len)
-    } };
+    ProcCmd launch = { .args = { "xcrun", "simctl", "launch", "booted", bid } };
     if run_cmd(&launch) != 0 { die("simctl launch failed"); }
-    out(name);
-    say(" running in iOS Simulator");
+    print("{} running in iOS Simulator\n", name);
     return 0;
 }
 
@@ -961,17 +881,16 @@ i32 do_ios_sim(str name, str src, bool do_run) {
 string find_provisioning_profile() {
     string home = env_get("HOME");
     defer free(home);
-    str h = str_from(home.data, home.len);
     str[2] dirs;
     dirs[0] = "Library/Developer/Xcode/UserData/Provisioning Profiles";
     dirs[1] = "Library/MobileDevice/Provisioning Profiles";
     for i32 i = 0; i < 2; i++ {
-        string d = path_join(h, dirs[i]);
+        string d = path_join(home, dirs[i]);
         defer free(d);
-        DirList l = dir_list(str_from(d.data, d.len), ".mobileprovision", false);
+        DirList l = dir_list(d, ".mobileprovision", false);
         defer dir_list_free(&l);
         if l.count > 0 {
-            return path_join(str_from(d.data, d.len), l.items[0]);
+            return path_join(d, l.items[0]);
         }
     }
     return string{};
@@ -983,10 +902,9 @@ string profile_team_id(str profile) {
     ProcCmd c = { .args = { "security", "cms", "-D", "-i", profile } };
     string xml = capture_out(&c);
     defer free(xml);
-    str x = str_from(xml.data, xml.len);
-    i32 at = str_find(x, "<key>TeamIdentifier</key>");
+    i32 at = str_find(xml, "<key>TeamIdentifier</key>");
     if at < 0 { return string{}; }
-    str rest = str_slice(x, at, x.len);
+    str rest = str_slice(xml, at, xml.len);
     i32 b = str_find(rest, "<string>");
     if b < 0 { return string{}; }
     str rest2 = str_slice(rest, b + 8, rest.len);
@@ -1003,17 +921,16 @@ string cert_team_ou(str cert_name) {
     string pem = capture_out(&c);
     defer free(pem);
     if pem.len == 0 { return string{}; }
-    if !file_write_str("build/_cert.pem", str_from(pem.data, pem.len)) { return string{}; }
+    if !file_write_str("build/_cert.pem", pem) { return string{}; }
     ProcCmd o = { .args = {
         "openssl", "x509", "-noout", "-subject", "-nameopt", "multiline",
         "-in", "build/_cert.pem"
     } };
     string subj = capture_out(&o);
     defer free(subj);
-    str s = str_from(subj.data, subj.len);
-    i32 at = str_find(s, "organizationalUnitName");
+    i32 at = str_find(subj, "organizationalUnitName");
     if at < 0 { return string{}; }
-    str rest = str_slice(s, at, s.len);
+    str rest = str_slice(subj, at, subj.len);
     i32 eq = str_find_byte(rest, '=');
     if eq < 0 { return string{}; }
     i32 nl = str_find_byte(rest, '\n');
@@ -1028,11 +945,10 @@ string find_signing_identity(str want_team) {
     ProcCmd c = { .args = { "security", "find-identity", "-v", "-p", "codesigning" } };
     string ids = capture_out(&c);
     defer free(ids);
-    str s = str_from(ids.data, ids.len);
     string first = string{};
     i32 pos = 0;
-    while pos < s.len {
-        str line = next_line(s, &pos);
+    while pos < ids.len {
+        str line = next_line(ids, &pos);
         if !str_contains(line, "Apple Development") { continue; }
         i32 q1 = str_find_byte(line, '"');
         if q1 < 0 { continue; }
@@ -1040,13 +956,13 @@ string find_signing_identity(str want_team) {
         i32 q2 = str_find_byte(rest, '"');
         if q2 < 0 { continue; }
         str cert_name = str_slice(rest, 0, q2);
-        if first.len == 0 { first = str_concat(cert_name, ""); }
+        if first.len == 0 { first = string(cert_name); }
         if want_team.len > 0 {
             string ou = cert_team_ou(cert_name);
             defer free(ou);
-            if str_equal(str_from(ou.data, ou.len), want_team) {
+            if str_equal(ou, want_team) {
                 free(first);
-                return str_concat(cert_name, "");
+                return string(cert_name);
             }
         }
     }
@@ -1064,27 +980,24 @@ i32 do_ios_device(str name, str src, bool do_run) {
     string prof_team = string{};
     defer free(prof_team);
     if prof.len > 0 {
-        prof_team = profile_team_id(str_from(prof.data, prof.len));
+        prof_team = profile_team_id(prof);
     }
-    string sign_id = find_signing_identity(str_from(prof_team.data, prof_team.len));
+    string sign_id = find_signing_identity(prof_team);
     defer free(sign_id);
     if sign_id.len == 0 {
         die("No code signing identity found. Sign in to Xcode (Settings > Accounts).");
     }
 
-    out("Compiling ");
-    out(name);
-    say(" (iOS device)...");
+    print("Compiling {} (iOS device)...\n", name);
     string exe = join_named("build", name, "");
     defer free(exe);
-    compile_for_target(src, "ios", str_from(exe.data, exe.len));
+    compile_for_target(src, "ios", exe);
 
-    string app_s = format("build/{}_device.app", name);
-    defer free(app_s);
-    str app_dir = str_from(app_s.data, app_s.len);
+    string app_dir = format("build/{}_device.app", name);
+    defer free(app_dir);
     string bid = bundle_id_for(name);
     defer free(bid);
-    stage_bundle_binary(app_dir, "", str_from(exe.data, exe.len), name);
+    stage_bundle_binary(app_dir, "", exe, name);
 
     // Landscape-only examples; everything else allows both.
     str orient = "<string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string>";
@@ -1093,93 +1006,81 @@ i32 do_ios_device(str name, str src, bool do_run) {
         orient = "<string>UIInterfaceOrientationLandscapeRight</string><string>UIInterfaceOrientationLandscapeLeft</string>";
     }
 
-    str_buf p;
-    str_buf_init(&p);
-    defer str_buf_free(&p);
-    str_buf_add(&p, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    str_buf_add(&p, "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n");
-    str_buf_add(&p, "<plist version=\"1.0\"><dict>\n");
-    string kv = format("    <key>CFBundleExecutable</key><string>{}</string>\n    <key>CFBundleName</key><string>{}</string>\n    <key>CFBundleIdentifier</key><string>{}</string>\n",
-                       name, name, str_from(bid.data, bid.len));
-    str_buf_add(&p, str_from(kv.data, kv.len));
-    free(kv);
-    str_buf_add(&p, "    <key>CFBundleVersion</key><string>1</string>\n");
-    str_buf_add(&p, "    <key>CFBundleShortVersionString</key><string>1.0</string>\n");
-    str_buf_add(&p, "    <key>CFBundlePackageType</key><string>APPL</string>\n");
-    str_buf_add(&p, "    <key>MinimumOSVersion</key><string>15.0</string>\n");
-    str_buf_add(&p, "    <key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n");
-    str_buf_add(&p, "    <key>DTPlatformName</key><string>iphoneos</string>\n");
-    string ok = format("    <key>UISupportedInterfaceOrientations</key><array>{}</array>\n", orient);
-    str_buf_add(&p, str_from(ok.data, ok.len));
-    free(ok);
-    str_buf_add(&p, "    <key>UIApplicationSceneManifest</key><dict>\n");
-    str_buf_add(&p, "        <key>UIApplicationSupportsMultipleScenes</key><false/>\n");
-    str_buf_add(&p, "        <key>UISceneConfigurations</key><dict>\n");
-    str_buf_add(&p, "            <key>UIWindowSceneSessionRoleApplication</key><array>\n");
-    str_buf_add(&p, "                <dict>\n");
-    str_buf_add(&p, "                    <key>UISceneConfigurationName</key><string>Default Configuration</string>\n");
-    str_buf_add(&p, "                    <key>UISceneDelegateClassName</key><string>_sapp_scene_delegate</string>\n");
-    str_buf_add(&p, "                </dict>\n");
-    str_buf_add(&p, "            </array>\n");
-    str_buf_add(&p, "        </dict>\n");
-    str_buf_add(&p, "    </dict>\n");
-    str_buf_add(&p, "    <key>UILaunchScreen</key><dict/>\n");
-    str_buf_add(&p, "</dict></plist>\n");
+    string p = format(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        "<plist version=\"1.0\"><dict>\n"
+        "    <key>CFBundleExecutable</key><string>{}</string>\n"
+        "    <key>CFBundleName</key><string>{}</string>\n"
+        "    <key>CFBundleIdentifier</key><string>{}</string>\n"
+        "    <key>CFBundleVersion</key><string>1</string>\n"
+        "    <key>CFBundleShortVersionString</key><string>1.0</string>\n"
+        "    <key>CFBundlePackageType</key><string>APPL</string>\n"
+        "    <key>MinimumOSVersion</key><string>15.0</string>\n"
+        "    <key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>\n"
+        "    <key>DTPlatformName</key><string>iphoneos</string>\n"
+        "    <key>UISupportedInterfaceOrientations</key><array>{}</array>\n"
+        "    <key>UIApplicationSceneManifest</key><dict>\n"
+        "        <key>UIApplicationSupportsMultipleScenes</key><false/>\n"
+        "        <key>UISceneConfigurations</key><dict>\n"
+        "            <key>UIWindowSceneSessionRoleApplication</key><array>\n"
+        "                <dict>\n"
+        "                    <key>UISceneConfigurationName</key><string>Default Configuration</string>\n"
+        "                    <key>UISceneDelegateClassName</key><string>_sapp_scene_delegate</string>\n"
+        "                </dict>\n"
+        "            </array>\n"
+        "        </dict>\n"
+        "    </dict>\n"
+        "    <key>UILaunchScreen</key><dict/>\n"
+        "</dict></plist>\n", name, name, bid, orient);
+    defer free(p);
     string plist = path_join(app_dir, "Info.plist");
     defer free(plist);
-    if !file_write_str(str_from(plist.data, plist.len), str_buf_to_str(&p)) {
-        die("cannot write Info.plist");
-    }
+    if !file_write_str(plist, p) { die("cannot write Info.plist"); }
 
     // Team for the entitlements: the signing cert's OU, the profile's
     // team, or an explicit MINC_TEAM_ID override.
     string team = env_get("MINC_TEAM_ID");
     if team.len == 0 {
         free(team);
-        team = cert_team_ou(str_from(sign_id.data, sign_id.len));
+        team = cert_team_ou(sign_id);
     }
     if team.len == 0 {
         free(team);
-        team = str_concat(str_from(prof_team.data, prof_team.len), "");
+        team = string(prof_team);
     }
     defer free(team);
-    str_buf e;
-    str_buf_init(&e);
-    defer str_buf_free(&e);
-    str_buf_add(&e, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    str_buf_add(&e, "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n");
-    str_buf_add(&e, "<plist version=\"1.0\"><dict>\n");
-    string ent = format("    <key>application-identifier</key><string>{}.{}</string>\n    <key>keychain-access-groups</key><array><string>{}.*</string></array>\n    <key>get-task-allow</key><true/>\n    <key>com.apple.developer.team-identifier</key><string>{}</string>\n",
-                        str_from(team.data, team.len), str_from(bid.data, bid.len),
-                        str_from(team.data, team.len), str_from(team.data, team.len));
-    str_buf_add(&e, str_from(ent.data, ent.len));
-    free(ent);
-    str_buf_add(&e, "</dict></plist>\n");
-    if !file_write_str("build/_entitlements.plist", str_buf_to_str(&e)) {
-        die("cannot write entitlements");
-    }
+    string ent = format(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+        "<plist version=\"1.0\"><dict>\n"
+        "    <key>application-identifier</key><string>{}.{}</string>\n"
+        "    <key>keychain-access-groups</key><array><string>{}.*</string></array>\n"
+        "    <key>get-task-allow</key><true/>\n"
+        "    <key>com.apple.developer.team-identifier</key><string>{}</string>\n"
+        "</dict></plist>\n", team, bid, team, team);
+    defer free(ent);
+    if !file_write_str("build/_entitlements.plist", ent) { die("cannot write entitlements"); }
 
     if prof.len > 0 {
         string emb = path_join(app_dir, "embedded.mobileprovision");
         defer free(emb);
-        ignore file_copy(str_from(prof.data, prof.len), str_from(emb.data, emb.len));
+        ignore file_copy(prof, emb);
     } else {
-        say("Warning: No provisioning profile found. Device install may fail.");
+        print("Warning: No provisioning profile found. Device install may fail.\n");
     }
     stage_assets(app_dir);
 
-    out("Signing with: ");
-    say(str_from(sign_id.data, sign_id.len));
+    print("Signing with: {}\n", sign_id);
     ProcCmd cs = { .args = {
-        "codesign", "-s", str_from(sign_id.data, sign_id.len),
+        "codesign", "-s", sign_id,
         "--entitlements", "build/_entitlements.plist", app_dir
     } };
     ignore run_cmd(&cs);
-    out("Bundle: ");
-    say(app_dir);
+    print("Bundle: {}\n", app_dir);
     if !do_run { return 0; }
 
-    say("Looking for connected device...");
+    print("Looking for connected device...\n");
     ProcCmd dl = { .args = {
         "xcrun", "devicectl", "list", "devices", "--json-output", "build/_devices.json"
     }, .capture = true };
@@ -1188,12 +1089,11 @@ i32 do_ios_device(str name, str src, bool do_run) {
     defer free(dev);
     string js = file_read_str("build/_devices.json");
     defer free(js);
-    str j = str_from(js.data, js.len);
     // devicectl emits keys alphabetically, so a device object's
     // "identifier" follows its connectionProperties.transportType.
     i32 scan = 0;
-    while dev.len == 0 && scan < j.len {
-        str rest = str_slice(j, scan, j.len);
+    while dev.len == 0 && scan < js.len {
+        str rest = str_slice(js, scan, js.len);
         i32 tt = str_find(rest, "\"transportType\"");
         if tt < 0 { break; }
         str after = str_slice(rest, tt, rest.len);
@@ -1213,30 +1113,27 @@ i32 do_ios_device(str name, str src, bool do_run) {
         scan = scan + tt + 15;
     }
     if dev.len == 0 {
-        say("No iOS device connected.");
-        out("Bundle ready at: ");
-        say(app_dir);
-        say("Connect a device, then:");
-        say("  xcrun devicectl device install app --device <id> <bundle>");
-        say("  xcrun devicectl device process launch --device <id> <bundle-id>");
+        print("No iOS device connected.\n"
+              "Bundle ready at: {}\n"
+              "Connect a device, then:\n"
+              "  xcrun devicectl device install app --device <id> <bundle>\n"
+              "  xcrun devicectl device process launch --device <id> <bundle-id>\n", app_dir);
         return 0;
     }
-    out("  Device: ");
-    say(str_from(dev.data, dev.len));
-    say("Installing...");
+    print("  Device: {}\n", dev);
+    print("Installing...\n");
     ProcCmd inst = { .args = {
         "xcrun", "devicectl", "device", "install", "app",
-        "--device", str_from(dev.data, dev.len), app_dir
+        "--device", dev, app_dir
     } };
     if run_cmd(&inst) != 0 { die("device install failed"); }
-    say("Launching...");
+    print("Launching...\n");
     ProcCmd launch = { .args = {
         "xcrun", "devicectl", "device", "process", "launch",
-        "--device", str_from(dev.data, dev.len), str_from(bid.data, bid.len)
+        "--device", dev, bid
     } };
     if run_cmd(&launch) != 0 { die("device launch failed"); }
-    out(name);
-    say(" running on device");
+    print("{} running on device\n", name);
     return 0;
 }
 
@@ -1302,16 +1199,15 @@ string android_sdk_home() {
         string lad = env_get("LOCALAPPDATA");
         defer free(lad);
         if lad.len > 0 {
-            return path_join(str_from(lad.data, lad.len), "Android\\Sdk");
+            return path_join(lad, "Android\\Sdk");
         }
         return string{};
     }
     when os(macos) || os(linux) {
         string home = env_get("HOME");
         defer free(home);
-        str h = str_from(home.data, home.len);
-        when os(macos) { return path_join(h, "Library/Android/sdk"); }
-        when os(linux) { return path_join(h, "Android/Sdk"); }
+        when os(macos) { return path_join(home, "Library/Android/sdk"); }
+        when os(linux) { return path_join(home, "Android/Sdk"); }
     }
 }
 
@@ -1327,21 +1223,21 @@ void ensure_java_on_path() {
     when os(macos) {
         string home = env_get("HOME");
         defer free(home);
-        string jroot = path_join(str_from(home.data, home.len), "Library/Java");
+        string jroot = path_join(home, "Library/Java");
         defer free(jroot);
-        string jdk = pick_latest_dir(str_from(jroot.data, jroot.len));
+        string jdk = pick_latest_dir(jroot);
         defer free(jdk);
         if jdk.len == 0 { return; }
-        string jhome = path_join(str_from(jdk.data, jdk.len), "Contents/Home");
+        string jhome = path_join(jdk, "Contents/Home");
         defer free(jhome);
-        string jbin = path_join(str_from(jhome.data, jhome.len), "bin");
+        string jbin = path_join(jhome, "bin");
         defer free(jbin);
-        ignore env_set("JAVA_HOME", str_from(jhome.data, jhome.len));
+        ignore env_set("JAVA_HOME", jhome);
         string cur = env_get("PATH");
         defer free(cur);
-        string np = format("{}:{}", str_from(jbin.data, jbin.len), str_from(cur.data, cur.len));
+        string np = format("{}:{}", jbin, cur);
         defer free(np);
-        ignore env_set("PATH", str_from(np.data, np.len));
+        ignore env_set("PATH", np);
     }
     return;
 }
@@ -1351,13 +1247,13 @@ string bt_tool(str bt_dir, str tool) {
     when os(windows) {
         string t = str_concat(tool, ".exe");
         defer free(t);
-        string cand = path_join(bt_dir, str_from(t.data, t.len));
-        if path_exists(str_from(cand.data, cand.len)) { return cand; }
+        string cand = path_join(bt_dir, t);
+        if path_exists(cand) { return cand; }
         free(cand);
         // apksigner is a .bat wrapper on Windows.
         string tb = str_concat(tool, ".bat");
         defer free(tb);
-        return path_join(bt_dir, str_from(tb.data, tb.len));
+        return path_join(bt_dir, tb);
     }
     return path_join(bt_dir, tool);
 }
@@ -1366,44 +1262,39 @@ i32 do_android(str name, str src, bool do_run) {
     ensure_java_on_path();
     string sdk = android_sdk_home();
     defer free(sdk);
-    if sdk.len == 0 || !path_is_dir(str_from(sdk.data, sdk.len)) {
+    if sdk.len == 0 || !path_is_dir(sdk) {
         die("Android SDK not found. Set ANDROID_HOME (see README).");
     }
-    str sdkp = str_from(sdk.data, sdk.len);
 
-    string ndk_root = path_join(sdkp, "ndk");
+    string ndk_root = path_join(sdk, "ndk");
     defer free(ndk_root);
-    string ndk = pick_latest_dir(str_from(ndk_root.data, ndk_root.len));
+    string ndk = pick_latest_dir(ndk_root);
     defer free(ndk);
     if ndk.len == 0 { die("Android NDK not found. See README."); }
-    string bt_root = path_join(sdkp, "build-tools");
+    string bt_root = path_join(sdk, "build-tools");
     defer free(bt_root);
-    string bt = pick_latest_dir(str_from(bt_root.data, bt_root.len));
+    string bt = pick_latest_dir(bt_root);
     defer free(bt);
     if bt.len == 0 { die("Android build-tools not found"); }
-    string plat_root = path_join(sdkp, "platforms");
+    string plat_root = path_join(sdk, "platforms");
     defer free(plat_root);
-    string plat = pick_latest_dir(str_from(plat_root.data, plat_root.len));
+    string plat = pick_latest_dir(plat_root);
     defer free(plat);
     if plat.len == 0 { die("Android platform (android.jar) not found"); }
 
     // NDK sysroot: the single host dir under prebuilt/. API 26
     // (Android 8.0) is the floor for libaaudio, which sokol_audio
     // examples link.
-    string prebuilt = path_join(str_from(ndk.data, ndk.len), "toolchains/llvm/prebuilt");
+    string prebuilt = path_join(ndk, "toolchains/llvm/prebuilt");
     defer free(prebuilt);
-    string host = pick_latest_dir(str_from(prebuilt.data, prebuilt.len));
+    string host = pick_latest_dir(prebuilt);
     defer free(host);
     if host.len == 0 { die("NDK prebuilt toolchain not found"); }
-    string sysroot = path_join(str_from(host.data, host.len),
-                               "sysroot/usr/lib/aarch64-linux-android/26");
+    string sysroot = path_join(host, "sysroot/usr/lib/aarch64-linux-android/26");
     defer free(sysroot);
-    str sr = str_from(sysroot.data, sysroot.len);
-    if !path_is_dir(sr) { die("NDK sysroot (API 26, aarch64) not found"); }
+    if !path_is_dir(sysroot) { die("NDK sysroot (API 26, aarch64) not found"); }
 
-    out("Compiling ");
-    out(name);
-    say(" (Android ARM64)...");
+    print("Compiling {} (Android ARM64)...\n", name);
     ProcCmd cc = { .args = { g_cc, src, "--target", "android", "--shared" } };
     str[6] libs = { "libc.so", "libGLESv3.so", "libEGL.so",
                     "libandroid.so", "liblog.so", "libaaudio.so" };
@@ -1411,9 +1302,9 @@ i32 do_android(str name, str src, bool do_run) {
     // alive until proc_run — free them after, not per iteration.
     noinit string[6] libpaths;
     for i32 i = 0; i < 6; i++ {
-        libpaths[i] = path_join(sr, libs[i]);
+        libpaths[i] = path_join(sysroot, libs[i]);
         proc_arg(&cc, "--link");
-        proc_arg(&cc, str_from(libpaths[i].data, libpaths[i].len));
+        proc_arg(&cc, libpaths[i]);
     }
     proc_arg(&cc, "-o");
     proc_arg(&cc, "build/libapp.so");
@@ -1421,34 +1312,32 @@ i32 do_android(str name, str src, bool do_run) {
     for i32 i = 0; i < 6; i++ { free(libpaths[i].data); }
     if cc_rc != 0 || !path_exists("build/libapp.so") { die("minc compile failed"); }
 
-    say("Packaging APK...");
+    print("Packaging APK...\n");
     string pkg_env = env_get("MINC_ANDROID_PACKAGE");
     defer free(pkg_env);
     str pkg = "com.minc.app";
-    if pkg_env.len > 0 { pkg = str_from(pkg_env.data, pkg_env.len); }
+    if pkg_env.len > 0 { pkg = pkg_env; }
 
-    str_buf m;
-    str_buf_init(&m);
-    defer str_buf_free(&m);
-    str_buf_add(&m, "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
-    string mo = format("<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n    package=\"{}\">\n", pkg);
-    str_buf_add(&m, str_from(mo.data, mo.len));
-    free(mo);
-    str_buf_add(&m, "    <uses-sdk android:minSdkVersion=\"26\" android:targetSdkVersion=\"35\"/>\n");
-    str_buf_add(&m, "    <uses-feature android:glEsVersion=\"0x00030000\" android:required=\"true\"/>\n");
-    str_buf_add(&m, "    <application android:hasCode=\"false\">\n");
-    str_buf_add(&m, "        <activity android:name=\"android.app.NativeActivity\"\n");
-    str_buf_add(&m, "            android:exported=\"true\"\n");
-    str_buf_add(&m, "            android:configChanges=\"orientation|keyboardHidden|screenSize\">\n");
-    str_buf_add(&m, "            <meta-data android:name=\"android.app.lib_name\" android:value=\"app\"/>\n");
-    str_buf_add(&m, "            <intent-filter>\n");
-    str_buf_add(&m, "                <action android:name=\"android.intent.action.MAIN\"/>\n");
-    str_buf_add(&m, "                <category android:name=\"android.intent.category.LAUNCHER\"/>\n");
-    str_buf_add(&m, "            </intent-filter>\n");
-    str_buf_add(&m, "        </activity>\n");
-    str_buf_add(&m, "    </application>\n");
-    str_buf_add(&m, "</manifest>\n");
-    if !file_write_str("build/AndroidManifest.xml", str_buf_to_str(&m)) {
+    string manifest = format(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\"\n"
+        "    package=\"{}\">\n"
+        "    <uses-sdk android:minSdkVersion=\"26\" android:targetSdkVersion=\"35\"/>\n"
+        "    <uses-feature android:glEsVersion=\"0x00030000\" android:required=\"true\"/>\n"
+        "    <application android:hasCode=\"false\">\n"
+        "        <activity android:name=\"android.app.NativeActivity\"\n"
+        "            android:exported=\"true\"\n"
+        "            android:configChanges=\"orientation|keyboardHidden|screenSize\">\n"
+        "            <meta-data android:name=\"android.app.lib_name\" android:value=\"app\"/>\n"
+        "            <intent-filter>\n"
+        "                <action android:name=\"android.intent.action.MAIN\"/>\n"
+        "                <category android:name=\"android.intent.category.LAUNCHER\"/>\n"
+        "            </intent-filter>\n"
+        "        </activity>\n"
+        "    </application>\n"
+        "</manifest>\n", pkg);
+    defer free(manifest);
+    if !file_write_str("build/AndroidManifest.xml", manifest) {
         die("cannot write AndroidManifest.xml");
     }
 
@@ -1456,14 +1345,13 @@ i32 do_android(str name, str src, bool do_run) {
     // APK zip is built entirely by lib/zip. The dir must exist first.
     ignore dir_remove("build/apk_dir");
     ignore dir_create("build/apk_dir");
-    string aapt2 = bt_tool(str_from(bt.data, bt.len), "aapt2");
+    string aapt2 = bt_tool(bt, "aapt2");
     defer free(aapt2);
-    string jar = path_join(str_from(plat.data, plat.len), "android.jar");
+    string jar = path_join(plat, "android.jar");
     defer free(jar);
     ProcCmd al = { .args = {
-        str_from(aapt2.data, aapt2.len), "link", "-o", "build/apk_dir",
-        "--output-to-dir", "--manifest", "build/AndroidManifest.xml",
-        "-I", str_from(jar.data, jar.len)
+        aapt2, "link", "-o", "build/apk_dir", "--output-to-dir",
+        "--manifest", "build/AndroidManifest.xml", "-I", jar
     } };
     if run_cmd(&al) != 0 { die("aapt2 link failed"); }
 
@@ -1477,11 +1365,10 @@ i32 do_android(str name, str src, bool do_run) {
     ignore zip_add_file(&z, "lib/arm64-v8a/libapp.so", "build/libapp.so", true);
     if !zip_end(&z, "build/app-unsigned.apk") { die("APK packaging failed"); }
 
-    string zipalign = bt_tool(str_from(bt.data, bt.len), "zipalign");
+    string zipalign = bt_tool(bt, "zipalign");
     defer free(zipalign);
     ProcCmd za = { .args = {
-        str_from(zipalign.data, zipalign.len), "-f", "4",
-        "build/app-unsigned.apk", "build/app.apk"
+        zipalign, "-f", "4", "build/app-unsigned.apk", "build/app.apk"
     }, .capture = true };
     if run_cmd(&za) != 0 { die("zipalign failed"); }
 
@@ -1494,101 +1381,95 @@ i32 do_android(str name, str src, bool do_run) {
         }, .capture = true };
         if run_cmd(&kt) != 0 { die("keytool failed (is a JDK installed?)"); }
     }
-    string apksigner = bt_tool(str_from(bt.data, bt.len), "apksigner");
+    string apksigner = bt_tool(bt, "apksigner");
     defer free(apksigner);
     ProcCmd sg = { .args = {
-        str_from(apksigner.data, apksigner.len), "sign",
-        "--ks", "build/debug.keystore", "--ks-pass", "pass:android",
-        "build/app.apk"
+        apksigner, "sign", "--ks", "build/debug.keystore",
+        "--ks-pass", "pass:android", "build/app.apk"
     } };
     if run_cmd(&sg) != 0 { die("apksigner failed"); }
-    say("APK: build/app.apk");
+    print("APK: build/app.apk\n");
     if !do_run { return 0; }
 
-    string pt = path_join(sdkp, "platform-tools");
+    string pt = path_join(sdk, "platform-tools");
     defer free(pt);
-    string adb = bt_tool(str_from(pt.data, pt.len), "adb");
+    string adb = bt_tool(pt, "adb");
     defer free(adb);
-    str adbp = str_from(adb.data, adb.len);
-    if !path_exists(adbp) {
-        say("adb not found. Install: adb install build/app.apk");
+    if !path_exists(adb) {
+        print("adb not found. Install: adb install build/app.apk\n");
         return 0;
     }
 
     // A device online? Otherwise boot the first emulator and wait.
-    ProcCmd dc = { .args = { adbp, "devices" } };
+    ProcCmd dc = { .args = { adb, "devices" } };
     string devs = capture_out(&dc);
-    bool have_dev = str_contains(str_from(devs.data, devs.len), "\tdevice");
+    bool have_dev = str_contains(devs, "\tdevice");
     free(devs);
     if !have_dev {
-        string emu_dir = path_join(sdkp, "emulator");
+        string emu_dir = path_join(sdk, "emulator");
         defer free(emu_dir);
-        string emu = bt_tool(str_from(emu_dir.data, emu_dir.len), "emulator");
+        string emu = bt_tool(emu_dir, "emulator");
         defer free(emu);
-        ProcCmd la = { .args = { str_from(emu.data, emu.len), "-list-avds" } };
+        ProcCmd la = { .args = { emu, "-list-avds" } };
         string avds = capture_out(&la);
         defer free(avds);
         i32 lp = 0;
-        str avd = next_line(str_from(avds.data, avds.len), &lp);
+        str avd = next_line(avds, &lp);
         if avd.len == 0 {
-            say("No device/emulator found. Install: adb install build/app.apk");
+            print("No device/emulator found. Install: adb install build/app.apk\n");
             return 0;
         }
-        out("Starting emulator (");
-        out(avd);
-        say(")...");
+        print("Starting emulator ({})...\n", avd);
         // proc_run waits for its child, so detach through the shell: the
         // backgrounded emulator survives this script's exit.
         when os(windows) {
-            string cl = format("start \"\" \"{}\" -avd {} -no-snapshot-load",
-                               str_from(emu.data, emu.len), avd);
+            string cl = format("start \"\" \"{}\" -avd {} -no-snapshot-load", emu, avd);
             defer free(cl);
-            ProcCmd es = { .args = { "cmd.exe", "/c", str_from(cl.data, cl.len) } };
+            ProcCmd es = { .args = { "cmd.exe", "/c", cl } };
             ignore run_cmd(&es);
         }
         when os(linux) || os(macos) {
-            string cl = format("\"{}\" -avd {} -no-snapshot-load >/dev/null 2>&1 &",
-                               str_from(emu.data, emu.len), avd);
+            string cl = format("\"{}\" -avd {} -no-snapshot-load >/dev/null 2>&1 &", emu, avd);
             defer free(cl);
-            ProcCmd es = { .args = { "sh", "-c", str_from(cl.data, cl.len) } };
+            ProcCmd es = { .args = { "sh", "-c", cl } };
             ignore run_cmd(&es);
         }
-        out("  Waiting for boot");
+        print("  Waiting for boot");
         for i32 i = 0; i < 60; i++ {
-            ProcCmd chk = { .args = { adbp, "devices" } };
+            ProcCmd chk = { .args = { adb, "devices" } };
             string o = capture_out(&chk);
-            bool up = str_contains(str_from(o.data, o.len), "\tdevice");
+            bool up = str_contains(o, "\tdevice");
             free(o);
             if up { break; }
-            out(".");
+            print(".");
             thread_sleep(2000);
         }
-        say("");
+        print("\n");
     }
     // Device online is not booted: launching before sys.boot_completed
     // gets "Activity class does not exist". Poll the property.
     for i32 i = 0; i < 30; i++ {
-        ProcCmd bc = { .args = { adbp, "shell", "getprop", "sys.boot_completed" } };
+        ProcCmd bc = { .args = { adb, "shell", "getprop", "sys.boot_completed" } };
         string o = capture_out(&bc);
-        bool booted = str_contains(str_from(o.data, o.len), "1");
+        bool booted = str_contains(o, "1");
         free(o);
         if booted { break; }
         thread_sleep(2000);
     }
 
-    say("Installing...");
-    ProcCmd inst = { .args = { adbp, "install", "-r", "build/app.apk" } };
+    print("Installing...\n");
+    ProcCmd inst = { .args = { adb, "install", "-r", "build/app.apk" } };
     if run_cmd(&inst) != 0 {
         // A re-generated debug keystore means a different signing key;
         // uninstall the old package and retry.
-        say("Install failed; uninstalling old package and retrying...");
-        ProcCmd un = { .args = { adbp, "uninstall", pkg }, .capture = true };
+        print("Install failed; uninstalling old package and retrying...\n");
+        ProcCmd un = { .args = { adb, "uninstall", pkg }, .capture = true };
         ignore run_cmd(&un);
-        ProcCmd inst2 = { .args = { adbp, "install", "build/app.apk" } };
+        ProcCmd inst2 = { .args = { adb, "install", "build/app.apk" } };
         if run_cmd(&inst2) != 0 { die("adb install failed"); }
     }
     thread_sleep(1000);
-    say("Launching...");
+    print("Launching...\n");
     string act = format("{}/android.app.NativeActivity", pkg);
     defer free(act);
     // `am start` exits 0 even when the activity is not found — the
@@ -1596,17 +1477,13 @@ i32 do_android(str name, str src, bool do_run) {
     bool launched = false;
     for i32 attempt = 0; attempt < 4 && !launched; attempt++ {
         if attempt > 0 { thread_sleep(3000); }
-        ProcCmd am = { .args = {
-            adbp, "shell", "am", "start", "-n", str_from(act.data, act.len)
-        }, .capture = true };
+        ProcCmd am = { .args = { adb, "shell", "am", "start", "-n", act }, .capture = true };
         ProcResult ar = proc_run(&am);
-        launched = ar.spawned && ar.exit_code == 0 &&
-                   !str_contains(str_from(ar.out.data, ar.out.len), "Error");
+        launched = ar.spawned && ar.exit_code == 0 && !str_contains(ar.out, "Error");
         proc_result_free(&ar);
     }
     if !launched { die("am start failed — is the emulator fully booted?"); }
-    out(name);
-    say(" running on Android");
+    print("{} running on Android\n", name);
     return 0;
 }
 
@@ -1617,65 +1494,60 @@ i32 do_platform(str platform, str target, bool do_run, bool open_flag) {
     string src = resolve_source(target);
     defer free(src);
     if src.len == 0 {
-        out("no such example: ");
-        say(target);
+        print("no such example: {}\n", target);
         exit(1);
     }
-    str srcp = str_from(src.data, src.len);
-    str name = path_stem(srcp);
+    str name = path_stem(src);
 
-    if str_equal(platform, "android") { return do_android(name, srcp, do_run); }
+    if str_equal(platform, "android") { return do_android(name, src, do_run); }
     when os(macos) {
-        if str_equal(platform, "macos-app") { return do_macos_app(name, srcp, do_run, open_flag); }
-        if str_equal(platform, "ios-sim") { return do_ios_sim(name, srcp, do_run); }
-        if str_equal(platform, "ios") { return do_ios_device(name, srcp, do_run); }
+        if str_equal(platform, "macos-app") { return do_macos_app(name, src, do_run, open_flag); }
+        if str_equal(platform, "ios-sim") { return do_ios_sim(name, src, do_run); }
+        if str_equal(platform, "ios") { return do_ios_device(name, src, do_run); }
     }
-    out(platform);
-    die(": requires a macOS host");
+    eprint("{}: requires a macOS host\n", platform);
+    exit(1);
     return 1;
 }
 
 // --- Verbs -------------------------------------------------------------
 
-i32 do_build_run(str target, bool do_run, bool watch) {
+i32 do_build_run(str target, bool do_run, bool watch,
+                 str* run_args, i32 nrun_args) {
     if str_equal(target, "hotreload") { return run_hotreload(watch); }
 
     string src = resolve_source(target);
     defer free(src);
     if src.len == 0 {
-        out("no such example: ");
-        say(target);
-        say("");
+        print("no such example: {}\n\n", target);
         list_examples();
         exit(1);
     }
-    str srcp = str_from(src.data, src.len);
-    str stem = path_stem(srcp);
+    str stem = path_stem(src);
 
     if str_equal(stem, "shim_demo") { build_shim_object(); }
 
     string exe = join_named("build", stem, EXE_SUFFIX);
     defer free(exe);
-    str exep = str_from(exe.data, exe.len);
-    out("Compiling ");
-    say(stem);
-    ProcCmd c = { .args = { g_cc, srcp, "-o", exep } };
-    if run_cmd(&c) != 0 || !path_exists(exep) { die("minc compile failed"); }
-    out("Built ");
-    say(exep);
+    print("Compiling {}\n", stem);
+    ProcCmd c = { .args = { g_cc, src, "-o", exe } };
+    if run_cmd(&c) != 0 || !path_exists(exe) { die("minc compile failed"); }
+    print("Built {}\n", exe);
     if do_run {
-        ProcCmd run = { .args = { exep } };
+        ProcCmd run = { .args = { exe } };
+        for i32 i = 0; i < nrun_args; i++ { proc_arg(&run, run_args[i]); }
         return run_cmd(&run);
     }
+    if nrun_args > 0 { print("note: extra arguments are only passed with `run`\n"); }
     return 0;
 }
 
 i32 do_wasm(str target, bool no_run) {
     if target.len == 0 {
-        say("Usage: minc wasm <example>");
-        say("  Any example that uses sokol_app for windowing.");
-        say("  Verified: sokol_cube, sokol_texcube, sokol_mandelbrot,");
-        say("            sphere_physics, raytracer, missile");
+        print("Usage: minc wasm <example>\n"
+              "  Any example that uses sokol_app for windowing.\n"
+              "  Verified: sokol_cube, sokol_texcube, sokol_mandelbrot,\n"
+              "            sphere_physics, raytracer, missile\n");
         exit(1);
     }
     str name = resolve_alias(target);
@@ -1686,16 +1558,11 @@ i32 do_wasm(str target, bool no_run) {
     string src = resolve_source(name);
     defer free(src);
     if src.len == 0 {
-        out("no such example: ");
-        say(target);
+        print("no such example: {}\n", target);
         exit(1);
     }
-    out("Building + serving ");
-    out(path_stem(str_from(src.data, src.len)));
-    say(" for the web (wasm)...");
-    ProcCmd c = { .args = {
-        g_cc, "run", "--target", "wasm", str_from(src.data, src.len)
-    } };
+    print("Building + serving {} for the web (wasm)...\n", path_stem(src));
+    ProcCmd c = { .args = { g_cc, "run", "--target", "wasm", src } };
     if no_run { proc_arg(&c, "--no-browser"); }
     return run_cmd(&c);
 }
@@ -1708,10 +1575,18 @@ i32 main() {
     bool no_run = false;
     bool open_flag = false;
     bool watch = false;
+    // Arguments after the target belong to the program `run` starts;
+    // `--` forwards everything after it verbatim (even script flags).
+    noinit str[32] run_args;
+    i32 nrun_args = 0;
+    bool fwd_rest = false;
 
     for i32 i = 1; i < argc; i++ {
         str a = str_from_cstr(get_arg(i));
-        if str_equal(a, "--no-run") { no_run = true; }
+        if fwd_rest {
+            if nrun_args < 32 { run_args[nrun_args] = a; nrun_args++; }
+        } else if str_equal(a, "--") { fwd_rest = true; }
+        else if str_equal(a, "--no-run") { no_run = true; }
         else if str_equal(a, "--open") { open_flag = true; }
         else if str_equal(a, "watch") { watch = true; }
         else if i == 1 {
@@ -1723,27 +1598,27 @@ i32 main() {
                    str_equal(a, "android") || str_equal(a, "macos-app")) {
             platform = a;
         } else if target.len == 0 { target = a; }
+        else if nrun_args < 32 { run_args[nrun_args] = a; nrun_args++; }
     }
 
     if str_equal(verb, "clean") {
         ignore dir_remove("build");
-        say("clean.");
+        print("clean.\n");
         return 0;
     }
     if str_equal(verb, "test") {
-        say("no tests in this project");
+        print("no tests in this project\n");
         return 0;
     }
 
     string minc = find_minc();
     defer free(minc);
     if minc.len == 0 {
-        say("");
-        say("minc compiler not found.");
-        say("Install it:  https://minc.dev  (or set MINC, see install_minc.md)");
+        print("\nminc compiler not found.\n"
+              "Install it:  https://minc.dev  (or set MINC, see install_minc.md)\n");
         die("See README.md (Quickstart).");
     }
-    g_cc = str_from(minc.data, minc.len);
+    g_cc = minc;
 
     if !path_exists("hello.mc") {
         die("run this from the minc-samples folder (hello.mc not found)");
@@ -1768,5 +1643,5 @@ i32 main() {
         list_examples();
         return 0;
     }
-    return do_build_run(target, is_run && !no_run, watch);
+    return do_build_run(target, is_run && !no_run, watch, &run_args[0], nrun_args);
 }
