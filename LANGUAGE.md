@@ -1870,6 +1870,15 @@ expands to its full system path, same rule as `@link "Foundation"`.
 Path-shaped values and explicit suffixes (`.dylib`, `.so`, `.o`)
 pass through untouched.
 
+A `from "symbol"` clause binds the data symbol under a different
+minc name, same as for function externs. This is the way to import
+a data symbol whose real name is a reserved built-in:
+
+```c
+extern "libc.so.6" void* c_stdout from "stdout";
+extern "libSystem.B.dylib" void* c_stdout from "__stdoutp";
+```
+
 Supported on macOS, iOS, Linux, and Android (executables and
 `--shared` libraries alike). Windows and `--target wasm` reject the
 declaration with a compile error naming the symbol and the target.
@@ -1896,10 +1905,9 @@ The operand is a string, so it covers symbols that aren't valid
 minc identifiers (mangled C++ names, decorated names).
 
 This also exists to import foreign symbols that collide with a 
-built-in. Built-in names (`alloc`, `free`, `realloc`, …) are 
-reserved. An `extern` that declares one of them with a sign-
-equivalent signature is a compile error. A different signature 
-overload is allowed.
+built-in. Built-in names (`alloc`, `free`, `realloc`, `write`, …) 
+are reserved: an `extern` that declares one of them is a compile 
+error. Use `from` syntax to rename the extern.
 
 ```c
 // error: extern 'free' shadows the builtin
@@ -1908,14 +1916,16 @@ extern "libc.so.6" void free(void* ptr);
 
 // ok: libc's free, callable as libc_free; the builtin free() is untouched
 extern "libc.so.6" void libc_free(void* ptr) from "free";
-
-// ok: different signature overload
-extern "randomlib.so" void free(void* ptr, i32 generation, i32 zombies);
 ```
 
-The same reservation applies to definitions: a function or a global
-variable named after a built-in is a compile error (a variable has
-no signature to overload with, so any built-in name is rejected).
+The same reservation applies to every other declaration in the value
+namespace: a function (generic templates included), a global
+variable, an enum value, a union variant, or a data extern
+(`extern "dll" T name;`) named after a built-in is a compile error.
+The rule holds regardless of visibility — `private` declarations are
+rejected the same way, in any file of the program. Data externs take
+the same `from` rename as function externs, so a foreign data symbol
+with a reserved name is imported under a distinct minc name.
 
 ### Linked object imports
 
