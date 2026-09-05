@@ -1,7 +1,7 @@
-// sokol_particles_compute.mc — test for @rwbuffer storage buffers.
+// sokol_particles_compute.mc — @rwbuffer storage buffers.
 //
-// 1024 particles bounce inside the viewport. A compute shader reads /
-// writes the particle state via `@rwbuffer(0) []Particle`.
+// 1024 particles bounce inside the viewport; a compute shader updates
+// them in place through `@rwbuffer(0) []Particle`.
 
 when os(wasm) { 
     @gpu "webgpu" 
@@ -25,9 +25,7 @@ const f32 PARTICLE_SIZE = 0.012f;   // half-extent in NDC
 
 // --- Shaders ---
 
-// Compute: read each particle, advance it, bounce off [-1, 1] walls,
-// write back. @rwbuffer = readwrite structured buffer (kind=3,
-// access=READWRITE in ShaderBinding[]).
+// Advance each particle and bounce it off the [-1, 1] walls.
 @shader compute(64, 1, 1)
 void update_cs(@rwbuffer(0) []Particle particles, @uniform f32 u_dt) {
     u32 id = thread_id().x;
@@ -70,7 +68,7 @@ sg_buffer quad_ibuf;           // 6 indices for the quad's two triangles
 sg_pipeline compute_pip;
 sg_pipeline render_pip;
 
-// xor-shift32 keeps init deterministic.
+// xorshift32: deterministic init
 u32 _xor32(u32 s) {
     s = s ^ (s << 13);
     s = s ^ (s >> 17);
@@ -89,8 +87,7 @@ void init() {
         .logger = sglue_logger(),
     });
 
-    // Seed the particle buffer. Stack-allocated; sokol copies the
-    // bytes during sg_make_buffer.
+    // Initial particle state; sg_make_buffer copies it.
     noinit Particle[N_PARTICLES] init_data;
     u32 rng = 0x9E3779B9;
     for i32 i = 0; i < N_PARTICLES; i++ {
@@ -101,9 +98,8 @@ void init() {
         init_data[i].vy = 0.5f * _rand_unit(&rng);
     }
 
-    // One sg_buffer used as both storage buffer (compute @rwbuffer)
-    // and vertex buffer (render per-instance attribute). `.immutable` is
-    // required for a read/write storage buffer.
+    // One buffer serves as compute storage buffer and per-instance
+    // vertex buffer. A read/write storage buffer must be immutable.
     particle_buf = sg_make_buffer(&sg_buffer_desc{
         .usage.storage_buffer = true,
         .usage.vertex_buffer  = true,
@@ -113,11 +109,10 @@ void init() {
         .data.size = sizeof(init_data),
     });
 
-    // sg_view wraps the buffer for the compute pass.
+    // view for the compute pass
     particle_sbv = sg_make_view(&sg_view_desc{ .storage_buffer.buffer = particle_buf });
 
-    // Per-vertex quad corners (NDC half-extents). Bound at vertex
-    // buffer slot 0 with the default per-vertex step.
+    // quad corners, vertex buffer slot 0
     f32[8] corners = {
         -PARTICLE_SIZE, -PARTICLE_SIZE,
          PARTICLE_SIZE, -PARTICLE_SIZE,
@@ -129,8 +124,7 @@ void init() {
         .data.size = cast(i64, sizeof(corners)),
     });
 
-    // Index buffer: two triangles forming the quad (indices into
-    // corners[]).
+    // two triangles per quad
     u16[6] indices;
     indices[0] = 0; indices[1] = 1; indices[2] = 2;
     indices[3] = 2; indices[4] = 1; indices[5] = 3;
@@ -146,8 +140,7 @@ void init() {
         .shader  = compute_shd,
     });
 
-    // Render pipeline: two vertex buffers — slot 0 per-vertex
-    // corners, slot 1 per-instance particle data.
+    // slot 0: per-vertex corners; slot 1: per-instance particles
     sg_shader render_shd = sokol_make_shader(&point_vs_shader, &point_fs_shader);
     render_pip = sg_make_pipeline(&sg_pipeline_desc{
         .shader = render_shd,
@@ -166,7 +159,7 @@ void init() {
 void frame() {
     f32 dt = cast(f32, sapp_frame_duration());
 
-    // Compute: advance particles in place via @rwbuffer.
+    // compute pass: advance particles in place
     sg_begin_pass(&sg_pass{ .compute = true });
     sg_apply_pipeline(compute_pip);
 
@@ -181,8 +174,7 @@ void frame() {
     sg_dispatch(N_PARTICLES / 64, 1, 1);
     sg_end_pass();
 
-    // Render: bind the same particle buffer as instance data alongside
-    // the static quad geometry.
+    // render pass: the particle buffer as instance data
     sg_begin_pass(&sg_pass{
         .action.colors[0].load_action = SG_LOADACTION_CLEAR,
         .action.colors[0].clear_value = sg_color{ 0.05f, 0.05f, 0.1f, 1.0f },
@@ -196,9 +188,8 @@ void frame() {
         .index_buffer      = quad_ibuf,
     });
 
-    // u_corner_scale = min(w,h) / float2(w,h) — keeps quads square
-    // in pixels on any aspect ratio. Recomputed every frame so
-    // window resize / device rotation works automatically.
+    // u_corner_scale = min(w,h) / (w,h) keeps the quads square at any
+    // aspect ratio.
     f32 fw = cast(f32, sapp_width());
     f32 fh = cast(f32, sapp_height());
     f32 mn = fw;

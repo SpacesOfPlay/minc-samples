@@ -1,15 +1,11 @@
-// engine_wasm.mc — the stable host, wasm variant.
+// engine_wasm.mc — the host, wasm variant.
 //
-// On wasm the loader half of libminc lives in the host page: JS
-// compiles the script with the in-browser compiler (minc_web.wasm,
-// fresh instance per compile), instantiates the fresh module, and
-// binds its "engine" imports to this module's exports. This engine
-// instance is never re-created, so the world survives every swap.
-//
-// The engine<->script seam is scalars only (integer handles + floats):
-// wasm modules share no memory, so no pointer — and no struct — can
-// cross. This is the wasm analogue of the "portable / C-interop
-// variant" in game_abi.mc.
+// JS does the loading: it compiles the script with the in-browser
+// compiler, instantiates the module, and binds its "engine" imports to
+// this module's exports. This instance is never re-created, so the
+// world survives every swap. The seam is scalars only (integer handles
+// and floats): wasm modules share no memory, so no pointer or struct
+// can cross.
 //
 //   node scripts/test_hotreload_wasm.js    # automated demo
 
@@ -49,9 +45,8 @@ u32 ew_spawn(i32 kind, f32 x, f32 y) {
     return index_to_entity(ind);
 }
 
-// One engine-owned slot for state the script wants to survive reloads
-// (its own memory dies with each instance) — the wasm shape of the
-// native demo's get_state/set_state pointer slot.
+// Engine-owned slot for script state that must survive reloads; the
+// script's own memory dies with each instance.
 u32 g_script_state = 0;
 
 i32 main() {
@@ -64,9 +59,8 @@ i32 main() {
 
 // --- the script-visible API ---
 //
-// The JS host hands these exports to the script instance as its
-// "engine" import namespace; the extern block in script_wasm.mc must
-// mirror the signatures exactly.
+// Exported to the script instance as its "engine" imports; the extern
+// block in script_wasm.mc must match these signatures.
 export {
 
 u32 abi_version() { return GAME_ABI_VERSION; }

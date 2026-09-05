@@ -14,7 +14,7 @@ const i32 PROG_START = 512;
 const i32 FONT_ADDR = 80;
 const i32 INSTR_PER_FRAME = 10;
 
-// CHIP-8 register names. F is the carry / collision flag register.
+// CHIP-8 register names. VF is the carry / collision flag register.
 const i32 VF = 0xF;
 
 // 0x00 family — system instructions.
@@ -83,8 +83,8 @@ i32 delay_timer = 0;
 i32 sound_timer = 0;
 bool[16] keys;
 bool draw_flag = false;
-// -1 = CPU running normally; otherwise = index of register that
-// will receive the next keypress (CPU is halted until then).
+// -1: running. Otherwise the register that receives the next
+// keypress; the CPU halts until then.
 i32 wait_key_reg = -1;
 
 // ============================================================================
@@ -275,8 +275,8 @@ void chip8_cycle() {
     i32 nn  = opcode & 0xFF;
     i32 nnn = opcode & 0xFFF;
 
-    // Top-level dispatch keyed off the high nibble. Mnemonics follow
-    // Cowgod's CHIP-8 reference (SE = skip if equal, JP = jump, etc.).
+    // Dispatch on the high nibble. Mnemonics follow Cowgod's CHIP-8
+    // reference.
     switch nib {
         case 0:    { op_0(opcode); }                                                         // 0NNN: system (CLS / RET)
         case 1:    { pc = nnn; }                                                             // 1NNN: JP nnn
@@ -423,7 +423,7 @@ void init() {
         .layout.attrs[1].format = SG_VERTEXFORMAT_FLOAT2,
     });
 
-    // Init emulator and load ROM from global path set in main()
+    // rom_path is set in sokol_main; fall back to the built-in test ROM
     chip8_init();
     if rom_path != null {
         load_rom(rom_path);

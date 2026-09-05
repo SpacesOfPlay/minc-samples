@@ -23,11 +23,11 @@
 // The minc compiler is taken from MINC, then PATH, then this folder.
 // Install minc from https://minc.dev.
 
-@minc_min_version "0.9.12"
+@minc_min_version "0.9.14"
 
 // Older minc ignores the tag above; this forces a clear error there.
-when !defined(MINC_VERSION) || MINC_VERSION < 9012 {
-    minc_0_9_12_or_newer_required please_update_minc;
+when !defined(MINC_VERSION) || MINC_VERSION < 9014 {
+    minc_0_9_14_or_newer_required please_update_minc;
 }
 
 import process;
@@ -92,7 +92,6 @@ i32 run_cmd(ProcCmd* c) {
 // Short aliases kept from the old build scripts.
 str resolve_alias(str name) {
     if str_equal(name, "missile") { return "missile_command"; }
-    if str_equal(name, "sphere_physics") { return "sokol_sphere_physics"; }
     return name;
 }
 
@@ -1547,7 +1546,7 @@ i32 do_wasm(str target, bool no_run) {
         print("Usage: minc wasm <example>\n"
               "  Any example that uses sokol_app for windowing.\n"
               "  Verified: sokol_cube, sokol_texcube, sokol_mandelbrot,\n"
-              "            sphere_physics, raytracer, missile\n");
+              "            raytracer, missile\n");
         exit(1);
     }
     str name = resolve_alias(target);

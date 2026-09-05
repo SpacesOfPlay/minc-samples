@@ -1,8 +1,7 @@
-// sokol_compute.mc — Compute shader with storage image output
+// sokol_compute.mc — compute shader writing a storage image.
 //
-// A compute shader generates an animated Mandelbrot pattern into a
-// storage image, then a render pass displays it as a textured fullscreen quad.
-// Uses @shader for cross-platform shader compilation (HLSL/GLSL/Metal).
+// A compute pass renders an animated Mandelbrot into a storage image;
+// a render pass draws it on a fullscreen quad.
 
 when os(wasm) { 
     @gpu "webgpu" 
@@ -12,9 +11,8 @@ when os(wasm) {
 import sokol_all;
 import math;
 
-// --- Shaders (compiled to HLSL/GLSL/Metal automatically) ---
+// --- Shaders ---
 
-// Compute shader: animated Mandelbrot → storage image.
 @shader compute(8, 8, 1)
 void mandelbrot_cs(@storage(rgba8) RWTexture2D img, @uniform f32 u_time) {
     uint2 pixel = thread_id().xy;
@@ -36,8 +34,7 @@ void mandelbrot_cs(@storage(rgba8) RWTexture2D img, @uniform f32 u_time) {
     float2 c = float2{TARGET_CX + (uv.x - 0.5f) * width * ar_x,
                       TARGET_CY + (uv.y - 0.5f) * width * ar_y};
 
-    // Iteration budget grows with zoom:
-    // log2(4 / width) * 32.0f, capped at 256
+    // iteration budget grows with zoom, capped at 256
     i32 iter_max = 64 + cast(i32, log2(4.0f / width) * 32.0f);
     if iter_max > 256 { iter_max = 256; }
 
@@ -59,7 +56,7 @@ void mandelbrot_cs(@storage(rgba8) RWTexture2D img, @uniform f32 u_time) {
     img[pixel] = float4{r, g, b, 1.0f};
 }
 
-// Render shaders: fullscreen quad with texture
+// fullscreen textured quad
 struct QuadVsOut {
     float4 pos;
     float2 uv;
@@ -93,10 +90,8 @@ sg_pipeline compute_pip;
 sg_buffer quad_vbuf;
 sg_pipeline render_pip;
 
-// Compute storage image dimensions — recreated to match the
-// framebuffer aspect ratio (and current size) on every resize so the
-// Mandelbrot doesn't get stretched on non-square viewports. Always
-// rounded down to a multiple of 8 to match the compute threadgroup.
+// Storage image size: rebuilt on resize to match the framebuffer,
+// rounded down to the 8x8 threadgroup.
 i32 g_tex_w = 0;
 i32 g_tex_h = 0;
 f32 g_time = 0.0f;
@@ -134,8 +129,6 @@ void init() {
         .logger = sglue_logger(),
     });
 
-    // Sampler is fixed; the storage image + its views are (re)built by
-    // rebuild_storage_image() to match the current framebuffer size.
     tex_smp = sg_make_sampler(&sg_sampler_desc{
         .min_filter = SG_FILTER_LINEAR,
         .mag_filter = SG_FILTER_LINEAR,
@@ -164,7 +157,6 @@ void init() {
         .data.size = sizeof(quad),
     });
 
-    // Render shader
     sg_shader render_shd = sokol_make_shader(&quad_vs_shader, &quad_fs_shader);
 
     render_pip = sg_make_pipeline(&sg_pipeline_desc{
@@ -177,14 +169,13 @@ void init() {
 void frame() {
     g_time = g_time + cast(f32, sapp_frame_duration());
 
-    // Compute pass: generate texture
+    // compute pass
     sg_begin_pass(&sg_pass{ .compute = true });
     sg_apply_pipeline(compute_pip);
 
     sg_apply_bindings(&sg_bindings{ .views[0] = tex_simg_view });
 
-    // CPU-side buffer is padded to 16 bytes — HLSL/MSL read the full
-    // cbuffer slice, GL reads only the first f32.
+    // padded to the 16-byte cbuffer slice
     f32[4] ub_data;
     ub_data[0] = g_time;
     sg_apply_uniforms(0, &sg_range{
@@ -194,7 +185,7 @@ void frame() {
     sg_dispatch(g_tex_w / 8, g_tex_h / 8, 1);
     sg_end_pass();
 
-    // Render pass: display texture on fullscreen quad
+    // render pass
     sg_begin_pass(&sg_pass{
         .action.colors[0].load_action = SG_LOADACTION_CLEAR,
         .action.colors[0].clear_value = sg_color{ 0.0f, 0.0f, 0.0f, 1.0f },

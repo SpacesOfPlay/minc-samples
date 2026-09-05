@@ -3,6 +3,13 @@
 Example programs and benchmarks for the [minc](https://minc.dev)
 compiler.
 
+More example code available at:
+Sokol  -  https://github.com/SpacesOfPlay/sokol-samples-minc
+Box3d  -  https://github.com/SpacesOfPlay/box3d-minc
+Kernel -  https://github.com/SpacesOfPlay/uefi-x64-minc
+Raylib -  https://github.com/SpacesOfPlay/raylib-minc
+Godot  -  https://github.com/SpacesOfPlay/godot-minc
+
 ## Setup
 
 Install minc first:
@@ -34,33 +41,33 @@ minc run raytracer.mc
 |---|---|
 | `hello.mc` | smallest program |
 | `mandelbrot.mc` | terminal Mandelbrot |
+| `chaos_pendulum.mc` | triple pendulum, float contracts |
+| `audio_vorbis.mc` | play an Ogg Vorbis file (`lib/stb_vorbis.mc`) |
+| `audio_engine.mc` | streamed music + synth SFX mixer (sokol) |
 | `raytracer.mc`, `raytracer_mt.mc` | software raytracer, single- and multi-threaded |
-| `chip8.mc` | CHIP-8 emulator (sokol) |
 | `missile_command.mc` | small game (sokol) |
+| `chip8.mc` | CHIP-8 emulator (sokol) |
 | `sokol_cube.mc`, `sokol_texcube.mc` | 3D basics, texturing |
 | `sokol_mandelbrot.mc` | GPU Mandelbrot |
 | `sokol_compute.mc`, `sokol_compute_rw.mc` | compute shaders |
-| `sokol_particles_compute.mc`, `sokol_sphere_physics.mc` | compute-driven particles / physics |
+| `sokol_particles_compute.mc` | compute-driven particles |
 | `imgui_demo.mc` | Dear ImGui |
-| `audio_sine.mc`, `audio_push.mc` | audio output |
 | `json_export.mc` | JSON writing |
 | `web_server.mc` | HTTP server |
 | `shim_demo.mc` | linking C code (`minc run shim_demo.mc`, needs a C compiler) |
-| `hotreload/` | hot-reload minc scripts into a running engine via libminc |
+| `hotreload/` | JIT: hot-reload minc scripts into a running engine via libminc |
 
-Graphics examples read assets from `test/` relative to the cwd, so
-run them from the repo root. `lib/` holds shared helper headers some
-examples import (`frame_timer.mc`); everything else resolves against
-the installed compiler's standard library.
+Examples read assets from `test/` relative to the cwd, run them
+from the repo root.
 
-The hot-reload demo lives in its own folder because it is three files
-(engine, contract, script). Build steps in `hotreload/README.md`.
+The hot-reload demo is in a sub-folder because it's three files. Build 
+steps in `hotreload/README.md`.
 
 ## Build script
 
 This folder is a minc project: `build.mc` scripts the builds, and the
 `minc` verbs drive it (same on Windows, macOS, and Linux). The compiler
-is found on PATH; set `MINC` to point at an install dir or binary.
+is found on PATH.
 
 ```
 minc run                       # list the examples
@@ -106,7 +113,7 @@ export ANDROID_HOME=~/Library/Android/sdk   # macOS default; Linux: ~/Android/Sd
 minc run android sokol_cube
 ```
 
-The script auto-detects JDK, NDK, and build tools; with no device
+The script auto-detects JDK, NDK, and build tools. With no device
 attached it boots the first available emulator.
 
 ## License
