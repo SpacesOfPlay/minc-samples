@@ -311,11 +311,9 @@ sg_view tex_view;
 
 // --- Aspect-ratio-preserving viewport
 //
-// The full-screen quad covers NDC -1..1, so without a viewport the
-// 4:3 raytraced image stretches to fill the canvas. Carve out the
-// largest centered 4:3 sub-rectangle and draw into that — pillarbox
-// when the canvas is wider than 4:3, letterbox when taller. The
-// bars fall back to the pass clear color (black).
+// The quad covers all of NDC, so the 4:3 image would stretch to the
+// canvas. Draw into the largest centered 4:3 rectangle instead; the
+// bars show the clear color.
 
 void apply_letterbox_viewport() {
     i32 cw = sapp_width();
@@ -358,7 +356,7 @@ void init() {
         .usage.stream_update = true,
     });
 
-    // Create sampler (nearest neighbor for crisp pixels)
+    // nearest sampling keeps the pixels sharp
     tex_smp = sg_make_sampler(&sg_sampler_desc{
         .min_filter = SG_FILTER_NEAREST,
         .mag_filter = SG_FILTER_NEAREST,

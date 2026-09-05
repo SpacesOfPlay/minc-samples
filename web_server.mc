@@ -1,13 +1,10 @@
-// web_server.mc — minimal HTTP/1.0 file server.
-// Serves files from a configurable directory (default ./wwwroot) on
-// a configurable port (default 8080). GET only, no concurrency.
-// `/` falls back to a built-in page when the root has no index.html,
-// so the example runs with no files present.
+// web_server.mc — minimal HTTP/1.0 file server. GET only, no
+// concurrency. Serves --root (default ./wwwroot) on --port (default
+// 8080); `/` falls back to a built-in page when there is no index.html.
 //
-// Binds to the loopback interface (127.0.0.1) only. This keeps
-// the listener invisible to LAN/external traffic and avoids the
-// Windows Firewall prompt on first run. For a LAN-visible server,
-// swap `net_listen_tcp_loopback` for `net_listen_tcp` below.
+// Binds to 127.0.0.1 only, which avoids the Windows Firewall prompt.
+// For a LAN-visible server use `net_listen_tcp` instead of
+// `net_listen_tcp_loopback`.
 //
 // Usage: web_server [--port <n>] [--root <dir>]
 
@@ -37,10 +34,8 @@ bool parse_request_line(str line, RequestLine* out) {
     return true;
 }
 
-// Reject anything that could escape wwwroot. ".." is the obvious one;
-// "//" prefix is rejected because some clients/proxies treat it as a
-// protocol-relative URL (//host/path) which would change semantics
-// before we get to map it to disk.
+// Reject paths that could escape the root: ".." anywhere, and a "//"
+// prefix, which some clients treat as a protocol-relative URL.
 bool path_is_safe(str path) {
     if path.len < 1 || path.data[0] != 47 { return false; }
     if path.len >= 2 && path.data[1] == 47 { return false; }
@@ -125,9 +120,8 @@ void handle_connection(Socket c) {
         return;
     }
 
-    // /__shutdown — exit cleanly. Loopback-only bind keeps this safe;
-    // used by the VS Code extension's "Stop WASM server" command and
-    // when auto-cleaning orphan servers from prior runs.
+    // /__shutdown exits the server. Safe because of the loopback-only
+    // bind; the VS Code extension uses it to stop and clean up servers.
     if str_equal(path, "/__shutdown") {
         send_response(c, "200 OK", "text/plain; charset=utf-8", "shutting down\n");
         net_close(c);
@@ -148,8 +142,7 @@ void handle_connection(Socket c) {
 
     FileData fd = file_read(fpath);
     if fd.data == null {
-        // No file. At the site root, serve a built-in welcome page so the
-        // example works with no wwwroot present; otherwise 404.
+        // No file: built-in page at the root, 404 elsewhere.
         if path.len == 1 {
             print("  GET / -> 200 (built-in welcome page)\n");
             send_response(c, "200 OK", "text/html; charset=utf-8",
@@ -167,13 +160,16 @@ void handle_connection(Socket c) {
     }
     defer free(fd.data);
 
-    str body = str_from(fd.data, fd.len);
+    if fd.len > 2147483647 {
+        send_response(c, "500 Internal Server Error", "text/plain; charset=utf-8", "File too large\n");
+        return;
+    }
+    str body = str_from(fd.data, cast(i32, fd.len));
     print("  GET {} -> 200 ({} bytes)\n", path, body.len);
     send_response(c, "200 OK", content_type_for(eff_path), body);
 }
 
-// Parse a decimal integer from a null-terminated u8* arg.
-// Returns -1 if the string contains anything other than digits.
+// Parse a decimal argument; -1 unless every byte is a digit.
 i32 parse_decimal(u8* s) {
     if *s == 0 { return 0 - 1; }
     i32 n = 0;

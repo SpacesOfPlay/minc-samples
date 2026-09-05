@@ -1,14 +1,13 @@
-// SDF cube — "mc" logo rendered on each face via signed distance fields
+// sokol_cube.mc — rotating cube with an SDF "mc" logo on each face.
 
-// sokol minc headers, transpiled from sokol C headers
 import sokol_all;
 import math;
 import linear;
-// Shader live reload — every call is a no-op unless built with -DSHADER_LIVE=1
-// $ minc run --shader-live examples/sokol_cube.mc
+// Shader live reload; no-ops unless built with -DSHADER_LIVE=1
+// (`minc run --shader-live sokol_cube.mc`).
 import shader_live;
 
-// --- Shaders (compiled to HLSL/MSL/GLSL automatically) ---
+// --- Shaders ---
 
 struct VsOut {
     float4 pos;
@@ -43,10 +42,8 @@ float4 cube_fs(VsOut input) {
     f32 u = cu * ca - cv * sa + 0.5f;
     f32 v = cu * sa + cv * ca + 0.5f;
 
-    // "m" spans from mx=0 to mx=0.18 (width 0.18)
-    // "c" spans from cx-cw to cx+cw (width 0.18)
-    // gap between m and c: ~0.06
-    // total width: 0.18 + 0.06 + 0.18 = 0.42, centered at 0.5 → starts at 0.29
+    // "m" and "c" are 0.18 wide with a 0.06 gap: 0.42 total, centred
+    // at 0.5, so "m" starts at 0.29.
     f32 mx = u - 0.29f;
     f32 my = v - 0.5f;
     f32 sw = 0.035f;      // stroke width
@@ -58,7 +55,7 @@ float4 cube_fs(VsOut input) {
     f32 m5 = max(abs(mx - 0.135f) - 0.055f, abs(my + h - sw) - sw);
     f32 md = min(min(min(m1, m2), min(m3, m4)), m5);
 
-    // Letter "c": open box (3 sides)
+    // "c": three sides of a box
     f32 cx = u - 0.62f;   // center of "c": 0.29 + 0.18 + 0.06 + 0.09 = 0.62
     f32 cy = v - 0.5f;
     f32 cw = 0.09f;       // half width of "c"
@@ -162,13 +159,11 @@ void init() {
     g_pip = sg_make_pipeline(&pip_desc);
     g_rot = quat_identity();
 
-    // enable shader live editing, these are no-op on WASM
     shader_live_init();
     shader_live_register(&g_pip, &pip_desc, &cube_vs_shader, &cube_fs_shader);
 }
 
 void frame() {
-    // shader live editing updates done here
     shader_live_frame();
 
     f32 dt = cast(f32, sapp_frame_duration());

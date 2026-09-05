@@ -135,8 +135,7 @@ void build_api() {
 
 void* g_ctx;
 
-// Folder holding script.mc + game_abi.mc, relative to cwd: a checkout
-// root with a hotreload/ subfolder, or cwd already inside the folder.
+// Folder holding script.mc + game_abi.mc: hotreload/
 str g_root;
 
 str hr_root() {
@@ -166,8 +165,8 @@ struct ScriptModule {
     ScriptHook reloaded;
     u64        src_hash;    // FNV of the confirmed source; skips no-op recompiles
     FileStamp  stamp;       // last seen file metadata
-    // Import closure of the last successful compile (game_abi, …); an
-    // edit to any of these retriggers the compile.
+    // import closure of the last successful compile; an edit to any
+    // member recompiles
     u8*[MAX_CLOSURE]       cl_path;
     FileStamp[MAX_CLOSURE] cl_stamp;
     i32                    cl_count;
@@ -192,9 +191,8 @@ void capture_closure(ScriptModule* mod) {
     }
 }
 
-// Compile the script file (imports resolve as siblings + the set root),
-// validate its ABI, and swap it in create-before-destroy. Any failure
-// keeps the previous module.
+// Compile the script, validate its ABI, then swap create-before-destroy.
+// Any failure keeps the previous module.
 bool engine_reload(ScriptModule* mod, u8* path) {
     var newmod = minc_compile_file(g_ctx, path);
     if newmod == null {
@@ -256,8 +254,8 @@ void engine_tick(u8* path, ScriptModule* mod, InputState in) {
     engine_run_frame(mod, in);
 }
 
-// Imported files can live outside the watched directory, so their
-// stamps are polled directly — a handful of metadata reads per tick.
+// Imported files may live outside the watched directory, so poll their
+// stamps directly.
 void engine_check_closure(u8* path, ScriptModule* mod, InputState in) {
     for i32 i = 0; i < mod.cl_count; i++ {
         FileStamp st = file_stamp(str_from_cstr(mod.cl_path[i]));

@@ -11,8 +11,7 @@ import frame_timer;
 // Constants
 // ============================================================================
 
-// Game-space dimensions are f32 — used in pixel math throughout.
-// Window/canvas size at sokol setup hardcodes 800/600 separately.
+// Game-space size, f32 for pixel math. The window size is set separately.
 const f32 SCREEN_W = 800.0f;
 const f32 SCREEN_H = 600.0f;
 const i32 MAX_VERTS = 4096;
@@ -216,7 +215,7 @@ i32 rng_int(i32 lo, i32 hi) {
 // Vertex buffer — dynamic, rebuilt each frame
 // ============================================================================
 
-f32[MAX_VERTS * 8] verts;  // MAX_VERTS(4096) * 8 floats (pos4 + color4)
+f32[MAX_VERTS * 8] verts;  // 8 floats per vertex: pos4 + color4
 u32 vert_count = 0;
 
 void push_vert(f32 x, f32 y, f32 r, f32 g, f32 b, f32 a) {
@@ -386,8 +385,8 @@ float4x4 make_ortho() {
     };
 }
 
-// Reserve the largest centered 4:3 sub-rectangle of the canvas so
-// the 800x600 game space scales without distortion.
+// Largest centered 4:3 viewport, so the game space scales without
+// distortion.
 void apply_letterbox_viewport() {
     i32 cw = sapp_width();
     i32 ch = sapp_height();
@@ -419,9 +418,9 @@ void init_game() {
     // Place cities evenly across the ground
     for i32 i = 0; i < NUM_CITIES; i++ {
         city_alive[i] = true;
-        // Skip center for battery: cities at positions 1-3 left, 5-7 right of 9 slots
+        // 9 slots; slot 4 is the battery
         i32 slot = i;
-        if i >= 3 { slot = i + 1; } // skip slot 4 (battery)
+        if i >= 3 { slot = i + 1; }
         city_x[i] = cast(f32, 60 + slot * 80);
     }
 
@@ -502,7 +501,7 @@ float2 missile_current_pos(float2 s, float2 t, f32 prog) {
 void update_game(f32 dt) {
     if game_over { return; }
 
-    // Move crosshairhair
+    // Move crosshair
     if key_left  { crosshair.x = crosshair.x - CROSSHAIR_SPEED * dt; }
     if key_right { crosshair.x = crosshair.x + CROSSHAIR_SPEED * dt; }
     if key_up    { crosshair.y = crosshair.y - CROSSHAIR_SPEED * dt; }
@@ -589,7 +588,7 @@ void update_game(f32 dt) {
 
     // Wave management
     if enemies_alive <= 0 {
-        // Check if any enemy missiles still active (shouldn't be, but safety)
+        // the wave ends only when no enemy missile is active
         i32 still_active = 0;
         for i32 i = 0; i < MAX_ENEMY; i++ {
             if em_active[i] { still_active++; }
@@ -676,8 +675,8 @@ void render_game() {
 
     // Crosshair
     if game_over == false {
-        f32 cs = 12.0f; // crosshairhair half-size
-        f32 ct = 2.0f;  // crosshairhair thickness
+        f32 cs = 12.0f; // crosshair half-size
+        f32 ct = 2.0f;  // crosshair thickness
         // Horizontal bar
         draw_rect(crosshair.x - cs, crosshair.y - ct * 0.5f, cs * 2.0f, ct,
                   0.0f, 1.0f, 0.0f);
@@ -721,14 +720,9 @@ void render_game() {
 // Audio
 // ============================================================================
 //
-// Stream-callback mixer with hand-coded synthesis. The results of this very
-// basic audio setup is pretty glitchy right now.
-//
-// The audio thread calls audio_cb() every buffer (~10-20 ms) and
-// the game thread triggers SFX by claiming a voice slot via
-// play_sfx(). Voices are mixed additively in audio_cb; no locks => 
-// one frame of glitch at worst.
-//
+// Stream-callback mixer with synthesized SFX. The game thread claims a
+// voice slot in play_sfx(); audio_cb() sums the active voices. No
+// locks: a race costs at most one buffer.
 
 const i32 AUDIO_RATE = 44100;
 const i32 NUM_VOICES = 8;
@@ -754,8 +748,7 @@ u32 _noise_step(u32 s) {
     return s;
 }
 
-// Fire: sine sweep 800 Hz → 200 Hz over the SFX duration with a
-// linear amplitude decay.
+// Fire: sine sweep 800 Hz → 200 Hz, linear amplitude decay.
 f32 fire_render(Voice* v) {
     f32 t = cast(f32, v.pos) / cast(f32, v.length);
     f32 freq = 800.0f - 600.0f * t;
@@ -796,8 +789,7 @@ f32 gameover_render(Voice* v) {
     return sinf(v.phase) * env * 0.25f;
 }
 
-// Explode: low-pass-filtered white-noise rumble with a raw
-// broadband crackle layered on top for a noisier blast.
+// Explode: low-passed noise rumble plus a raw noise crackle layer.
 f32 explode_render(Voice* v) {
     v.noise_state = _noise_step(v.noise_state);
     f32 noise = cast(f32, cast(i32, v.noise_state >> 8) & 0xFFFF) / 32768.0f - 1.0f;
@@ -806,8 +798,8 @@ f32 explode_render(Voice* v) {
     f32 alpha = 6.2831853f * fc / cast(f32, AUDIO_RATE);
     v.phase = v.phase + alpha * (noise - v.phase);
     f32 env = (1.0f - t) * (1.0f - t);
-    // Raw noise decays linearly (slower than the body) so the blast
-    // keeps hissing into the long tail.
+    // The crackle decays linearly, slower than the body, so it carries
+    // the tail.
     f32 crackle = noise * (1.0f - t) * 0.28f;
     return v.phase * env * 0.7f + crackle;
 }
@@ -815,7 +807,7 @@ f32 explode_render(Voice* v) {
 void audio_cb(f32* buf, i32 nframes, i32 nchannels) {
     // Clear output — sokol doesn't guarantee a zero buffer.
     for i32 i = 0; i < nframes * nchannels; i++ { buf[i] = 0.0f; }
-    // Mix active voices into the cleared buffer.
+    // Mix active voices.
     for i32 vi = 0; vi < NUM_VOICES; vi++ {
         Voice* v = &voices[vi];
         if !v.active { continue; }
@@ -854,8 +846,8 @@ void init_audio() {
     saudio_desc desc;
     desc.sample_rate = AUDIO_RATE;
     desc.num_channels = 1;
-    // 1024 frames = ~23 ms latency at 44.1 kHz on native.
-    // On web, JS layer adds extra buffer which lands at around 50ms total latency.
+    // 1024 frames = ~23 ms at 44.1 kHz; the web host adds its own buffer,
+    // ~50 ms total.
     desc.buffer_frames = 1024;
     desc.stream_cb = audio_cb;
     saudio_setup(&desc);
@@ -907,8 +899,8 @@ void init() {
         .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
     });
 
-    // Fullscreen quad: pos2 + uv2 = 4 floats per vertex, 6 verts (two triangles).
-    // NDC coords; stays a local — the buffer desc points at it.
+    // Fullscreen quad in NDC: pos2 + uv2, 6 vertices. A local; the buffer
+    // desc points at it.
     f32[24] blit_data;
     blit_data[0]  = 0.0f - 1.0f; blit_data[1]  = 1.0f;        blit_data[2]  = 0.0f; blit_data[3]  = 0.0f;
     blit_data[4]  = 1.0f;        blit_data[5]  = 1.0f;        blit_data[6]  = 1.0f; blit_data[7]  = 0.0f;
@@ -928,7 +920,7 @@ void init() {
     });
 
     // ----- Bloom: two quarter-res ping-pong targets -----
-    // ba_desc is reused for both images, so it stays a named local.
+    // ba_desc is shared by both images.
     sg_image_desc ba_desc = sg_image_desc{
         .width = BLOOM_W,
         .height = BLOOM_H,
@@ -950,8 +942,8 @@ void init() {
         .wrap_v = SG_WRAP_CLAMP_TO_EDGE,
     });
 
-    // Bloom pipelines — same fullscreen-quad layout + RGBA8/no-depth target,
-    // differing only by fragment shader.
+    // Bloom pipelines: same quad layout and RGBA8 target, different
+    // fragment shaders.
     sg_shader bright_shd = sokol_make_shader(&mc_blit_vs_shader, &mc_bright_fs_shader);
     bright_pip = sg_make_pipeline(&sg_pipeline_desc{
         .shader = bright_shd,
@@ -980,7 +972,7 @@ void init() {
         .depth.pixel_format = SG_PIXELFORMAT_NONE,
     });
 
-    // Init game (don't spawn yet — wait for start screen)
+    // init game; spawning starts after the start screen
     init_game();
     game_started = false;
 }
@@ -998,8 +990,8 @@ void frame() {
     // Upload vertices
     sg_update_buffer(vbuf, &sg_range{ .ptr = &verts, .size = vert_count * 32 });
 
-    // ----- Pass 1: render game into the offscreen RT (full RT, no viewport
-    // shaping — the RT IS the SCREEN_W × SCREEN_H game space).
+    // ----- Pass 1: game into the offscreen RT, which is the game space;
+    // no viewport -----
     sg_begin_pass(&sg_pass{
         .action.colors[0].load_action = SG_LOADACTION_CLEAR,
         .action.colors[0].clear_value = sg_color{ 0.02f, 0.02f, 0.08f, 1.0f },
@@ -1057,8 +1049,8 @@ void frame() {
         sg_end_pass();
     }
 
-    // ----- Composite: scene RT (tex 0) + bloom_a (tex 1) → swapchain,
-    // letterboxed into a 4:3 sub-rectangle, with the full CRT effect.
+    // ----- Composite: scene RT (tex 0) + bloom (tex 1) → swapchain,
+    // 4:3 letterboxed, CRT effect -----
     sg_begin_pass(&sg_pass{
         .action.colors[0].load_action = SG_LOADACTION_CLEAR,
         .action.colors[0].clear_value = sg_color{ 0.0f, 0.0f, 0.0f, 1.0f },
@@ -1074,9 +1066,8 @@ void frame() {
         .samplers[1] = bloom_smp,
     });
 
-    // CRT composite uniform: x = time (drives noise), y = noise amount
-    // (faded in over the first second). ortho/fsparams stay locals —
-    // the sg_range points at them.
+    // CRT uniform: x = time, y = noise amount (fades in over the first
+    // second). ortho/fsparams are locals the sg_range points at.
     f32 noise_fade = 0.0f;
     if (crt_time < 1.0f) {
         noise_fade = 10.0f * (1.0f - crt_time);
@@ -1091,8 +1082,7 @@ void frame() {
 
 // Tap / click handler. `sx, sy` are framebuffer pixels.
 void handle_tap(f32 sx, f32 sy) {
-    // Invert apply_letterbox_viewport to recover logical 800×600
-    // game coords. Taps outside the playfield are ignored.
+    // Invert the letterbox viewport to game coords; ignore taps outside it.
     i32 cw = sapp_width();
     i32 ch = sapp_height();
     f32 ca = cast(f32, cw) / cast(f32, ch);
@@ -1111,7 +1101,7 @@ void handle_tap(f32 sx, f32 sy) {
     f32 gx = rx * SCREEN_W;
     f32 gy = ry * SCREEN_H;
     if game_started == false || game_over {
-        // Start (or restart on game-over). Mirrors the SPACE / R path.
+        // start, or restart after game over (same as SPACE / R)
         init_game();
         game_started = true;
         spawn_wave();

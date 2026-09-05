@@ -1,5 +1,4 @@
 // game_abi.mc — the engine <-> script contract.
-//
 
 const u32 GAME_ABI_VERSION = 2;
 
@@ -41,8 +40,8 @@ struct HostApi {
 
 // --- Portable / C-interop variant (for reference) ---
 //
-// When the module must be C-callable or built by a different compiler
-// keep the seam to scalars and pointers only.
+// For a C-callable module, or one built by another compiler, keep the
+// seam to scalars and pointers.
 //
 //   struct HostApi {
 //       u32 abi_version;

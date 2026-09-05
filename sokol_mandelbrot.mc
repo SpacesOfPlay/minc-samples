@@ -1,5 +1,4 @@
-// sokol_mandelbrot.mc — Animated Mandelbrot via fragment shader.
-//
+// sokol_mandelbrot.mc — animated Mandelbrot in a fragment shader.
 
 import sokol_all;
 import math;
@@ -19,29 +18,21 @@ QuadVsOut quad_vs(@attr(0) float2 position, @attr(1) float2 texcoord) {
     return o;
 }
 
-// Fragment shader: animated Mandelbrot.
-//
-// u_params.x = u_time   seconds since start (loops every 16 s)
-// u_params.y = u_aspect viewport width/height (for aspect-correct
-//              c-plane mapping on non-square framebuffers)
-//
-// Packed into a single float4 uniform so the cbuffer slice stays on
-// the 16-byte boundary every backend expects.
+// u_params: x = time in seconds, y = viewport aspect (w/h). Packed in
+// one float4 to keep the cbuffer slice 16-byte aligned.
 @shader fragment
 float4 mandelbrot_fs(QuadVsOut input, @uniform float4 u_params) {
     f32 u_time   = u_params.x;
     f32 u_aspect = u_params.y;
     float2 uv = input.uv;
 
-    // Aspect-correct mapping: width is constant along the shorter
-    // axis, stretched along the longer one.
+    // aspect correction: the shorter axis keeps the nominal width
     f32 ar_x = 1.0f;
     f32 ar_y = 1.0f;
     if u_aspect >= 1.0f { ar_x = u_aspect; }
     else                { ar_y = 1.0f / u_aspect; }
 
-    // Loop the time so the demo restarts once the zoom hits its end
-    // point.
+    // loop every 16 s
     f32 LOOP    = 16.0f;
     f32 t_loop  = u_time - floor(u_time / LOOP) * LOOP;
     f32 TARGET_CX = -0.7756838f;
@@ -85,8 +76,7 @@ void init() {
         .logger = sglue_logger(),
     });
 
-    // Fullscreen quad: 6 verts (two triangles), each carries NDC
-    // position + uv passthrough for the fragment-shader Mandelbrot.
+    // fullscreen quad: x, y, u, v
     f32[24] quad = {
         -1.0f,  1.0f, 0.0f, 0.0f,
          1.0f,  1.0f, 1.0f, 0.0f,
@@ -122,7 +112,7 @@ void frame() {
 
     sg_apply_bindings(&sg_bindings{ .vertex_buffers[0] = quad_vbuf });
 
-    // Uniforms: time + aspect packed into a float4 (z/w unused).
+    // time + aspect; z, w unused
     f32 aspect = 1.0f;
     if sapp_height() > 0 {
         aspect = cast(f32, sapp_width()) / cast(f32, sapp_height());

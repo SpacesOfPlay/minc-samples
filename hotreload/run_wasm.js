@@ -74,12 +74,12 @@ const mathImports = {
   asin: Math.asin, acos: Math.acos, atan: Math.atan, atan2: Math.atan2,
   exp: Math.exp, log: Math.log, log2: Math.log2, log10: Math.log10,
   pow: Math.pow, fmod: (a, b) => a % b, fabs: Math.abs,
-  floor: Math.floor, ceil: Math.ceil, round: Math.round,
+  floor: Math.floor, ceil: Math.ceil, trunc: Math.trunc, round: Math.round,
   sinf: Math.sin, cosf: Math.cos, tanf: Math.tan, sqrtf: Math.sqrt,
   asinf: Math.asin, acosf: Math.acos, atanf: Math.atan, atan2f: Math.atan2,
   expf: Math.exp, logf: Math.log, log2f: Math.log2, log10f: Math.log10,
   powf: Math.pow, fmodf: (a, b) => a % b, fabsf: Math.abs,
-  floorf: Math.floor, ceilf: Math.ceil, roundf: Math.round,
+  floorf: Math.floor, ceilf: Math.ceil, truncf: Math.trunc, roundf: Math.round,
 };
 
 function readCStr(memory, ptr) {

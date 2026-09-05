@@ -1,14 +1,13 @@
 // shim_demo.mc — call a C shim, in both directions.
 //
-// shim_demo.c is compiled to a per-platform object and pulled in by the
-// @link tags below; minc merges it statically, so the result has no C
-// runtime and no shared-library dependencies.
+// shim_demo.c is compiled to a per-platform object and linked by the
+// @link tags below. minc merges it statically: no C runtime, no
+// shared-library dependencies.
 //
 // Build & run:  ./build.sh shim   (or  .\build.ps1 shim  on Windows)
 //
-// @link paths resolve relative to this file, so "build/x" lands in the
-// repo's build/ dir from any working directory. Each platform links its
-// native object format (ELF / Mach-O / COFF).
+// @link paths resolve relative to this file, so "build/x" is the
+// repo's build/ dir from any working directory.
 when os(linux) {
     @link "build/shim_demo_linux.o"
 }
@@ -19,8 +18,7 @@ when os(windows) {
     @link "build/shim_demo_win.obj"
 }
 
-// minc -> C: a plain extern — the symbol comes from the linked object,
-// not a shared library, so there's no library name.
+// minc -> C. No library name: the symbol comes from the linked object.
 extern i32 shim_mix(i32 a, i32 b);
 
 // C -> minc: the shim calls this back through a function pointer. minc's

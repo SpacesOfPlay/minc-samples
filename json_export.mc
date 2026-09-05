@@ -16,7 +16,7 @@ struct Json {
     str_buf sb;
     i32 depth;
     bool after_key;    // the next value follows a key — skip the element prefix
-    bool[64] first;    // per depth: still empty (no element written yet)
+    bool[64] first;    // per depth: no element written yet
 }
 
 void json_init(Json* j) {
@@ -41,8 +41,6 @@ void json_before_item(Json* j) {
     json_indent(j);
 }
 
-// Every value writer starts here. A value right after a key reuses the
-// key's prefix; otherwise it is an array element and gets its own.
 void json_value_prefix(Json* j) {
     if j.after_key { j.after_key = false; return; }
     json_before_item(j);
@@ -124,8 +122,8 @@ void json_bool(Json* j, bool b) {
 
 // --- the data ---------------------------------------------------------
 
-// f64 for masses/radii/gravity (large values land in scientific form),
-// f32 for albedo (~3 significant digits is all the source data has).
+// f64 for mass/radius/gravity (large values print in scientific form),
+// f32 for albedo (the source data has ~3 significant digits).
 void emit_body(Json* j, str name, f64 mass_kg, f64 radius_km,
                f64 gravity, f32 albedo, i64 moons, bool rings) {
     json_begin_obj(j);

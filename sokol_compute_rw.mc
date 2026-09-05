@@ -1,7 +1,6 @@
-// sokol_compute_rw.mc — test for @storage(fmt, rw) RW storage images.
+// sokol_compute_rw.mc — @storage(fmt, rw) read/write storage images.
 //
-
-// This example is not supported on WebGPU at the moment.
+// Not supported on WebGPU.
 
 
 import sokol_all;
@@ -20,11 +19,11 @@ void trails_cs(@storage(rgba8, rw) RWTexture2D img, @uniform float4 u_packed) {
     f32 t      = u_packed.x;
     f32 dpi    = u_packed.y;    
     f32 cx     = cast(f32, size.x) * 0.5f;
-    f32 cy     = cast(f32, size.x) * 0.5f;
+    f32 cy     = cast(f32, size.y) * 0.5f;
     f32 radius = min(cx, cy) * 0.64f;
 
-    // Decay last frame's accumulation, then add each source's
-    // distance-falloff contribution into its own colour channel.
+    // Decay the previous frame, then add each source to its own channel
+    // with distance falloff.
     float4 prev = img[pixel];
     float3 acc  = prev.xyz * 0.94f;
 
@@ -43,7 +42,7 @@ void trails_cs(@storage(rgba8, rw) RWTexture2D img, @uniform float4 u_packed) {
         if k == 2 { acc.z = acc.z + falloff; }
     }
 
-    // Clamp so the rgba8 backing can't saturate to a flat plate.
+    // clamp for the rgba8 backing
     acc = saturate(acc);
     img[pixel] = float4{acc.x, acc.y, acc.z, 1.0f};
 }
@@ -129,7 +128,7 @@ void init() {
         .shader  = compute_shd,
     });
 
-    // Two triangles forming the fullscreen quad. Layout: x, y, u, v.
+    // fullscreen quad: x, y, u, v
     f32[24] quad = {
         -1.0f,  1.0f, 0.0f, 0.0f,
          1.0f,  1.0f, 1.0f, 0.0f,

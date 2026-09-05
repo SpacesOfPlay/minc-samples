@@ -1,4 +1,4 @@
-// Sokol textured cube
+// sokol_texcube.mc — textured cube.
 
 import sokol_all;
 import math;
@@ -8,7 +8,7 @@ import file;
 import png;
 
 
-// --- Shaders (compiled to HLSL/MSL/GLSL automatically) ---
+// --- Shaders ---
 
 struct VsOut {
     float4 pos;
@@ -47,15 +47,14 @@ sg_sampler g_smp;
 float4 g_rot;
 
 
-// --- vertex / index buffer helpers (mirrors sokol_cube.mc patterns) ---
+// --- vertex / index buffer helpers ---
 
 i32 quad([]i32 idx, i32 i, i32 a, i32 b, i32 c, i32 d) {
     idx[i..] = { a, b, c, a, c, d };
     return i + 6;
 }
 
-// Vertex layout: pos(4) + uv(2) = 6 floats. w=1 baked into the buffer
-// matches the `@attr(0) float4 position` shader input.
+// Vertex: pos(4, w = 1) + uv(2) = 6 floats.
 i32 vert([]f32 buf, i32 i, f32 x, f32 y, f32 z, f32 u, f32 v) {
     buf[i..] = { x, y, z, 1.0f, u, v };
     return i + 6;
@@ -145,8 +144,8 @@ void init() {
         .usage.index_buffer = true, .data.ptr = &idx, .data.size = sizeof(idx),
     });
 
-    // Shader + pipeline. sokol_make_shader populates the texture +
-    // sampler bindings from the @shader-emitted ShaderMeta tables.
+    // sokol_make_shader fills the texture and sampler bindings from the
+    // @shader metadata.
     sg_shader shd = sokol_make_shader(&texcube_vs_shader, &texcube_fs_shader);
     g_pip = sg_make_pipeline(&sg_pipeline_desc{
         .shader = shd,

@@ -1,13 +1,12 @@
 // raytracer_mt.mc — multi-threaded Whitted raytracer.
 //
-// Architecture:
-//   - Full re-render every display frame (orbit camera)
-//   - Horizontal-stripe decomposition: N workers, each owns H/N rows
-//     (disjoint writes → no synchronisation during render)
+// Every frame is rendered in full. A persistent worker pool pulls
+// 32x32 tiles from an atomic counter; tiles are disjoint, so the
+// render needs no locks.
 //
-// Scene: Cornell-box-lite — red left wall, green right wall, white back wall
-// and ceiling, checker floor. Three balls: mirror, metal, glass-look,
-// plus a small gold ball orbiting the central mirror.
+// Scene: red left wall, green right wall, white back wall, checker
+// floor. Three balls (mirror, metal, glass-look) and a small gold ball
+// orbiting the central mirror.
 
 import sokol_all;
 import math;
@@ -16,7 +15,7 @@ import thread;
 import atomic;
 
 // ============================================================================
-// Configuration — render resolution only hardcoded here.
+// Configuration
 // ============================================================================
 
 when !os(ios) {
@@ -24,10 +23,9 @@ when !os(ios) {
     i32 IMG_H = 600;
 }
 when os(ios) {
-    // Widescreen 2:1 — closer to iPhone landscape (~2.17:1) so the
-    // letterbox bars stay narrow, with ~33% fewer pixels than 800×600
-    // for some headroom on the per-pixel cost. Camera frustum auto-
-    // adapts via `half_w = half_h * IMG_W/IMG_H` (see line ~600).
+    // 2:1 is close to iPhone landscape, so the letterbox bars stay
+    // narrow, and has a third fewer pixels than 800x600. The camera
+    // frustum follows IMG_W/IMG_H.
     i32 IMG_W = 800;
     i32 IMG_H = 400;
 }
@@ -36,10 +34,8 @@ i32 MAX_WORKERS = 16;
 i32 MAX_DEPTH = 2;
 f32 EPSILON = 0.001f;
 
-// Tile-queue scheduler: IMG broken into TILE × TILE pixel tiles; workers
-// pull tile indices via atomic_add. Small enough that load imbalance is
-// bounded (a slow tile only stalls one worker), big enough to amortise
-// the per-tile overhead (atomic + address computation).
+// Tile size: small enough that one slow tile stalls only one worker,
+// large enough to amortize the per-tile atomic.
 i32 TILE_W = 32;
 i32 TILE_H = 32;
 
@@ -79,8 +75,8 @@ struct HitRecord {
     Material mat;
 }
 
-// Sphere [3] is the orbiting ball — its position is rewritten every frame
-// in frame() before workers wake.
+// Sphere 3 is the orbiting ball; frame() repositions it before the
+// workers wake.
 Sphere[4] g_spheres;
 Plane[4]  g_planes;   // floor, back, left, right
 
@@ -96,9 +92,8 @@ float4 g_ambient;
 // Per-frame camera + worker scheduling
 // ============================================================================
 
-// Per-frame camera state — written by main at start of frame(), read by
-// every worker during render. Frame-to-frame boundary enforced by the
-// semaphore handshake (workers wait for work_ready before reading).
+// Per-frame camera state. Written by frame() before the workers are
+// woken, read by every worker; the semaphore handshake orders the two.
 struct FrameState {
     float4 eye;
     float4 forward;
@@ -112,20 +107,16 @@ struct FrameState {
 }
 FrameState g_frame;
 
-// Tile queue: workers atomically increment g_next_tile to claim the
-// next tile index; when they read a value >= g_frame.n_tiles they stop.
+// Tile queue: workers claim indices with atomic_add and stop at n_tiles.
 i32 g_next_tile;
 
 Thread[16] g_threads;
 i32      g_worker_count;   // determined at init() from cpu_count()
 
-// Persistent thread pool:
-//   - g_work_ready[i]: main → worker i; main releases one per frame, worker
-//     waits on its own semaphore.
-//   - g_all_done: workers → main; each worker releases once when its stripe
-//     is finished; main waits N times to collect N signals.
-//   - g_pool_shutdown: sticky flag the workers check after waking, used by
-//     cleanup() to unwind the pool cleanly.
+// Persistent thread pool. g_work_ready[i] wakes worker i once per
+// frame; each worker signals g_all_done when the queue is empty and
+// main waits N times. g_pool_shutdown is checked after every wake so
+// cleanup() can end the loops.
 Semaphore[16]  g_work_ready;
 Semaphore      g_all_done;
 bool           g_pool_shutdown;
@@ -163,20 +154,20 @@ Plane make_plane(float4 point, float4 normal, Material mat, bool checker) {
 }
 
 void init_scene() {
-    // Three balls sitting on the floor (y = radius)
-    // Mirror ball (chrome) — central, largest
+    // Three balls on the floor (y = radius).
+    // mirror ball, center
     g_spheres[0] = make_sphere(
         float4{0.0f, 0.9f, -0.5f, 0.0f}, 0.9f,
         make_mat(float4{0.95f, 0.95f, 0.98f, 0.0f}, 0.9f, 256.0f));
-    // Metal ball (warm copper) — left front
+    // copper ball, left front
     g_spheres[1] = make_sphere(
         float4{-1.3f, 0.55f, 0.9f, 0.0f}, 0.55f,
         make_mat(float4{0.95f, 0.55f, 0.25f, 0.0f}, 0.45f, 64.0f));
-    // Glass-look ball (pale blue, high specular + reflectivity — no refraction)
+    // glass-look ball: high specular and reflectivity, no refraction
     g_spheres[2] = make_sphere(
         float4{1.3f, 0.55f, 0.9f, 0.0f}, 0.55f,
         make_mat(float4{0.75f, 0.85f, 0.95f, 0.0f}, 0.6f, 180.0f));
-    // Small gold ball — placeholder position; rewritten each frame.
+    // gold ball; repositioned every frame
     g_spheres[3] = make_sphere(
         float4{0.0f, 1.6f, -0.5f, 0.0f}, 0.2f,
         make_mat(float4{1.0f, 0.78f, 0.2f, 0.0f}, 0.55f, 128.0f));
@@ -185,32 +176,29 @@ void init_scene() {
     Material red   = make_mat(float4{0.65f, 0.04f, 0.04f, 0.0f}, 0.02f, 0.0f);
     Material green = make_mat(float4{0.04f, 0.6f, 0.07f, 0.0f}, 0.02f, 0.0f);
 
-    // Floor (checkerboard), facing up
+    // floor, checkered, facing up
     g_planes[0] = make_plane(
         float4{0.0f, 0.0f, 0.0f, 0.0f},
         float4{0.0f, 1.0f, 0.0f, 0.0f},
         white, true);
-    // Back wall at z = -2.5, facing +z
+    // back wall at z = -2.5, facing +z
     g_planes[1] = make_plane(
         float4{0.0f, 0.0f, -2.5f, 0.0f},
         float4{0.0f, 0.0f, 1.0f, 0.0f},
         white, false);
-    // Left wall at x = -2.5, facing +x — RED
+    // left wall at x = -2.5, facing +x, red
     g_planes[2] = make_plane(
         float4{-2.5f, 0.0f, 0.0f, 0.0f},
         float4{1.0f, 0.0f, 0.0f, 0.0f},
         red, false);
-    // Right wall at x = 2.5, facing -x — GREEN
+    // right wall at x = 2.5, facing -x, green
     g_planes[3] = make_plane(
         float4{2.5f, 0.0f, 0.0f, 0.0f},
         float4{-1.0f, 0.0f, 0.0f, 0.0f},
         green, false);
 
-    // Two directional lights — a warm key from above-right and a cooler
-    // fill from the opposite side. With a single overhead sun, each side
-    // wall only catches ~cos(θ_wide) of the light; a second light aimed
-    // across the scene puts direct illumination on both walls and brings
-    // the red/green up to saturation.
+    // Two directional lights: a warm key from above right and a cool
+    // fill from the other side, so both side walls get direct light.
     g_light_dir   = normalize(float4{0.6f, 1.1f, 0.3f, 0.0f});
     g_light_color = float4{1.15f, 1.1f, 0.95f, 0.0f};
     g_light2_dir  = normalize(float4{-0.6f, 0.6f, 0.2f, 0.0f});
@@ -239,8 +227,7 @@ HitRecord ray_sphere(Ray r, Sphere s) {
     rec.did_hit = true;
     rec.t = t;
     rec.point = r.origin + r.dir * t;
-    // |rec.point - s.center| == s.radius by construction, so we can
-    // scale by 1/radius instead of calling normalize (saves a sqrt).
+    // |point - center| == radius, so scaling by 1/radius avoids a sqrt.
     rec.normal = (rec.point - s.center) * (1.0f / s.radius);
     rec.mat = s.mat;
     return rec;
@@ -286,14 +273,9 @@ HitRecord trace_scene(Ray r) {
     return closest;
 }
 
-// Shadow-only trace — tests against sphere occluders only. Infinite wall
-// planes would produce spurious occluder hits from any point whose shadow
-// ray passes through them outside their visual footprint, which reads
-// as "everything is in shadow". Walls are visual-only.
-//
-// Returns any-hit rather than closest-hit: callers only ask "is anything
-// blocking the light" (directional light at infinity, so every sphere hit
-// is a valid occluder), so stop at the first sphere that blocks.
+// Shadow test against the spheres only: the infinite wall planes would
+// occlude from outside their visible extent. Any hit blocks a
+// directional light, so the first hit is returned.
 HitRecord trace_occluder(Ray r) {
     HitRecord rec;
     rec.did_hit = false;
@@ -319,14 +301,11 @@ float4 sky_color(float4 dir) {
     return float4{0.55f, 0.7f, 0.95f, 0.0f} * t + float4{0.85f, 0.88f, 0.92f, 0.0f} * (1.0f - t);
 }
 
-// Shade a hit WITHOUT recursing — just local lighting (ambient + diffuse +
-// specular + shadow). Reflection is driven by the outer trace loop so we
-// can keep this function non-recursive (minc has no forward prototypes).
+// Local lighting only (ambient, diffuse, specular, shadow); reflection
+// is handled by the trace loop.
 void add_light(float4* color_io, Ray shadow_ray_base, HitRecord hit, float4 eye,
                float4 light_dir, float4 light_color) {
-    // Surface faces away from the light — no diffuse, no specular, no
-    // shadow ray needed. Blinn-Phong specular on a back-facing surface
-    // is a non-physical artifact anyway.
+    // Back-facing to the light: no diffuse, specular or shadow ray.
     f32 ndotl = dot(hit.normal, light_dir);
     if ndotl <= 0.0f { return; }
 
@@ -362,8 +341,8 @@ float4 shade_local(Ray r, HitRecord hit, float4 eye) {
     return color;
 }
 
-// Trace a primary ray with up to MAX_DEPTH-1 reflection bounces.
-// Written as an iterative throughput accumulator instead of recursion.
+// Trace a primary ray with up to MAX_DEPTH-1 reflection bounces,
+// iteratively.
 float4 trace_path(Ray r, float4 eye) {
     float4 result = float4{0.0f, 0.0f, 0.0f, 0.0f};
     float4 throughput = float4{1.0f, 1.0f, 1.0f, 0.0f};
@@ -380,7 +359,7 @@ float4 trace_path(Ray r, float4 eye) {
             result = result + throughput * local;
             return result;
         }
-        // Mix: add (1-k) * throughput * local to result, continue with k * throughput
+        // blend: (1-k) of local now, k carried into the bounce
         result = result + throughput * local * (1.0f - k);
         throughput = throughput * k * hit.mat.color;
         cur.origin = hit.point + hit.normal * EPSILON;
@@ -390,8 +369,7 @@ float4 trace_path(Ray r, float4 eye) {
 }
 
 // ============================================================================
-// Worker: render a single TILE_W × TILE_H region, then loop pulling tiles
-// from the shared atomic counter until the frame's tile queue is empty.
+// Worker: render tiles from the shared queue until it is empty.
 // ============================================================================
 
 void render_tile(i32 tile_idx) {
@@ -406,7 +384,7 @@ void render_tile(i32 tile_idx) {
     f32 inv_h = 1.0f / cast(f32, IMG_H);
 
     for i32 y = y0; y < y1; y++ {
-        // NDC-y goes +1 at top → -1 at bottom (flip image Y to match screen)
+        // NDC y is +1 at the top; image rows go down
         f32 sy = 1.0f - 2.0f * (cast(f32, y) + 0.5f) * inv_h;
         for i32 x = x0; x < x1; x++ {
             f32 sx = 2.0f * (cast(f32, x) + 0.5f) * inv_w - 1.0f;
@@ -422,7 +400,7 @@ void render_tile(i32 tile_idx) {
             r.dir = dir;
             float4 col = trace_path(r, g_frame.eye);
 
-            // Clamp, then gamma ~2.0 via sqrt (cheap approximation of 2.2).
+            // clamp, then gamma 2.0 via sqrt
             if col.x < 0.0f { col.x = 0.0f; } if col.x > 1.0f { col.x = 1.0f; }
             if col.y < 0.0f { col.y = 0.0f; } if col.y > 1.0f { col.y = 1.0f; }
             if col.z < 0.0f { col.z = 0.0f; } if col.z > 1.0f { col.z = 1.0f; }
@@ -440,20 +418,15 @@ void render_tile(i32 tile_idx) {
     return;
 }
 
-// Persistent worker thread — sleeps on its own work_ready semaphore,
-// drains tiles from g_next_tile while any remain, signals all_done,
-// and loops back. Exits when g_pool_shutdown is observed after a wake.
+// Worker thread: wait for work_ready, drain the tile queue, signal
+// all_done. Exits when g_pool_shutdown is set.
 void worker_loop(void* arg) {
     i32 id = cast(i32, cast(i64, arg));
     while true {
         sem_wait(&g_work_ready[id]);
         if g_pool_shutdown { return; }
-        // Pull tiles until the queue is empty. atomic_add returns the
-        // OLD counter value (this worker's tile); the next worker sees
-        // the incremented counter and claims the next tile. Relaxed
-        // ordering is fine here — the only cross-thread dependency is
-        // the increment itself, and there's no memory we need to
-        // synchronise with the counter's writes.
+        // atomic_add returns the claimed index. Relaxed ordering
+        // suffices: the counter carries no other data.
         while true {
             i32 t = atomic_add(&g_next_tile, 1, RELAXED);
             if t >= g_frame.n_tiles { break; }
@@ -518,7 +491,7 @@ void init() {
     if n < 1 { n = 1; }
     g_worker_count = n;
 
-    // Spawn the persistent pool — each worker sleeps on its own semaphore.
+    // Start the pool; each worker waits on its own semaphore.
     sem_init(&g_all_done, 0);
     for i32 i = 0; i < g_worker_count; i++ {
         sem_init(&g_work_ready[i], 0);
@@ -540,9 +513,8 @@ void init() {
 
     g_tex_view = sg_make_view(&sg_view_desc{ .texture.image = g_tex_img });
 
-    // Fullscreen quad (pos.xy + uv), 6 verts. Dynamic so we can rewrite
-    // it each resize to letterbox the 4:3 raytraced image on framebuffers
-    // with a different aspect (e.g. iPhone landscape ≈ 19.5:9).
+    // Fullscreen quad (pos.xy + uv), 6 verts; rewritten on resize to
+    // letterbox the image.
     g_quad_vbuf = sg_make_buffer(&sg_buffer_desc{
         .size = 24 * 4,
         .usage.stream_update = true,
@@ -558,9 +530,8 @@ void init() {
     update_quad_for_aspect();
 }
 
-// Letterbox the 4:3 (IMG_W:IMG_H) raytraced image on a framebuffer
-// with arbitrary aspect: shrink the quad on the long axis so it stays
-// proportional. Black bars fill the rest (clear color shows through).
+// Letterbox: shrink the quad along the framebuffer's long axis so the
+// image keeps its aspect; the clear color fills the bars.
 void update_quad_for_aspect() {
     f32 fb_w = cast(f32, sapp_width());
     f32 fb_h = cast(f32, sapp_height());
@@ -585,9 +556,8 @@ void update_quad_for_aspect() {
 void frame() {
     g_time = g_time + cast(f32, sapp_frame_duration());
 
-    // Camera sweeps a front arc (±32°) instead of a full orbit so it
-    // never clips through the side walls at x=±2.5. At worst-case radius
-    // (3.8) and amplitude (0.55 rad), max |x| = sin(0.55)*3.8 ≈ 1.99.
+    // The camera sweeps a 32 deg front arc rather than a full orbit, so it
+    // stays inside the side walls (max |x| = sin(0.55)*3.8 = 1.99 < 2.5).
     f32 angle = sinf(g_time * 0.35f) * 0.55f;       // ≈ ±32°
     f32 radius = 3.6f + cosf(g_time * 0.7f) * 0.2f; // subtle dolly
     float4 eye = float4{
@@ -607,12 +577,9 @@ void frame() {
     f32 half_h = tanf(fov * 0.5f);
     f32 half_w = half_h * cast(f32, IMG_W) / cast(f32, IMG_H);
 
-    // Orbit the small gold ball around the central mirror. xz orbit at the
-    // mirror's footprint (radius 1.55), but the orbit plane sits at y=1.6
-    // — high enough that even the bob's low point (y=1.25) clears the side
-    // balls (whose centers sit at y=0.55). Updated single-threaded before
-    // the workers wake; visibility is carried by the same semaphore release
-    // as the camera state below.
+    // Orbit the gold ball around the mirror at y=1.6, high enough to
+    // clear the side balls at its lowest point (y=1.25). Written before
+    // the workers wake, like the camera state.
     f32 orb_r = 1.55f;
     f32 orb_a = g_time * 0.9f;
     g_spheres[3].center = float4{
@@ -622,9 +589,8 @@ void frame() {
         0.0f
     };
 
-    // Publish this frame's camera + tile dimensions. Workers read this
-    // AFTER their work_ready semaphore wakes them, so the frame state is
-    // safely visible through the semaphore's implicit release/acquire.
+    // Publish the camera and tile layout; the semaphore release below
+    // makes it visible to the workers.
     g_frame.eye = eye;
     g_frame.forward = forward;
     g_frame.right = right;
@@ -635,11 +601,10 @@ void frame() {
     g_frame.n_tiles_y = (IMG_H + TILE_H - 1) / TILE_H;
     g_frame.n_tiles = g_frame.n_tiles_x * g_frame.n_tiles_y;
 
-    // Reset the tile counter. Plain store — workers aren't awake yet; the
-    // sem_signal below provides the release-visibility barrier.
+    // Plain store: the workers are asleep, and sem_signal publishes it.
     g_next_tile = 0;
 
-    // Wake all workers; each drains tiles from g_next_tile and then signals done.
+    // Wake the workers, then collect one done signal each.
     i32 n = g_worker_count;
     for i32 i = 0; i < n; i++ { sem_signal(&g_work_ready[i]); }
     for i32 i = 0; i < n; i++ { sem_wait(&g_all_done); }

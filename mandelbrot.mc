@@ -1,10 +1,7 @@
 // mandelbrot.mc — animated Mandelbrot zoom in the terminal.
 //
-// Targets: macOS, Linux, Windows 10+, WASM (driven by the
-// playground's frame() loop).
-//
-// Native run exits after ~16s or on Ctrl-C. WASM stops after
-// N_FRAMES — the playground's frame() loop ends.
+// Native: exits after N_FRAMES (~16 s) or on Ctrl-C. WASM: the
+// playground calls frame() until it returns 1.
 
 @utf8_console
 
@@ -12,8 +9,7 @@ import math;
 import terminal;
 import thread;
 
-// SIGINT/SIGTERM handler 
-// Used to restore cursor + colour on ctrl+C.
+// signal() for the Ctrl-C handler that restores cursor and colour.
 when os(macos) || os(ios) {
     extern "libSystem.B.dylib" void* signal(i32 sig, void* handler);
 }
@@ -23,14 +19,9 @@ when os(linux) || os(android) {
 
 // ----- Mandelbrot kernel ----------------------------------------------------
 
-// Smooth iteration count: integer escape iter plus a fractional
-// refinement from the final |z|. Cells that share an integer iter
-// land on distinct nu, so colour gradients don't band.
-//
-//   nu = i + 1 - log2(log2(|z|))
-//
-// One log2 per escaped cell, none for interior. Returns max_iter
-// (widened to f64) when the point doesn't escape.
+// Smooth iteration count nu = i + 1 - log2(log2(|z|)); the fractional
+// part keeps colour gradients from banding. Returns max_iter when the
+// point does not escape.
 f64 mandel_iter(f64 cx, f64 cy, i32 max_iter) {
     f64 zx = 0.0;
     f64 zy = 0.0;
@@ -52,23 +43,20 @@ f64 mandel_iter(f64 cx, f64 cy, i32 max_iter) {
 
 // ----- Frame rendering ------------------------------------------------------
 
-// Frame grid: g_cols × g_rows cells, one byte each, '\n' per row.
-// render_frame's 2× height factor compensates for terminal cells
-// being about twice as tall as wide. detect_term_size() refreshes
-// from the host; defaults stand on wasm and on pipe-failure.
+// Frame grid in terminal cells. detect_term_size() refreshes it from
+// the host; the defaults stand on wasm and when detection fails.
 i32 g_cols = 80;
 i32 g_rows = 32;
-// Worst-case 256-color frame: 11 bytes ANSI fg + 1 char = 12 per
-// cell. detect_term_size() rescales to the detected dimensions.
+// Frame buffer size, 12 bytes per cell worst case; detect_term_size()
+// recomputes it.
 i32 g_buf_len = 32768;
 
-// WASM animation state. main() seeds these; frame() (below) is
-// driven from JS via requestAnimationFrame.
+// WASM animation state, seeded by main() and advanced by frame().
 u8* g_wasm_buf   = null;
 f64 g_wasm_width = 4.0;
 i32 g_wasm_f     = 0;
 
-// Glyph palette (length via PAL.len — single source of truth)
+// glyph palette
 const str PAL = "@%#*+=-:. ";
 
 // 32-step gradient
@@ -94,9 +82,8 @@ const i32[32] COLOR_PAL = {
 };
 const i32 NCOLOR = sizeof(COLOR_PAL) / sizeof(i32);  // 32
 
-// Compress the smooth-iter axis so the bright end of the palette
-// covers boundary cells (nu ≈ max_iter / SHIFT) instead of only
-// the deep interior.
+// Maps nu in [0, max_iter / SHIFT] onto the palette, so boundary cells
+// reach the bright end.
 const i32 SHIFT = 4;
 
 i32 nu_to_color(f64 nu, i32 max_iter) {
@@ -107,9 +94,8 @@ i32 nu_to_color(f64 nu, i32 max_iter) {
     return COLOR_PAL[ci];
 }
 
-// Copy src into buf at idx; return new idx. Lets the prologue and
-// epilogue escapes ride along with the cells in one write — two
-// writes per frame flickers the Windows console.
+// Append src at idx; return the new idx. A frame is a single write:
+// two writes per frame flicker the Windows console.
 i32 buf_append(u8* buf, i32 idx, str src) {
     i32 n = cast(i32, src.len);
     for i32 i = 0; i < n; i = i + 1 {
@@ -118,8 +104,7 @@ i32 buf_append(u8* buf, i32 idx, str src) {
     return idx + n;
 }
 
-// Append `\x1b[38;5;Nm` (set 256-color foreground). Emits 1-3
-// decimal digits so single-digit indices don't pad the frame.
+// Append the 256-colour foreground escape `\x1b[38;5;Nm`.
 i32 emit_fg256(u8* out, i32 idx, i32 color) {
     idx = buf_append(out, idx, "\x1b[38;5;");
     if color >= 100 {
@@ -136,11 +121,10 @@ i32 emit_fg256(u8* out, i32 idx, i32 color) {
     return idx;
 }
 
-// Render one frame at the given viewport. `out` must be >=
-// g_buf_len bytes. `color`: emit ANSI fg-256 before each cell,
-// run-length encoded (only on change).
+// Render one frame into `out` (>= g_buf_len bytes). With `color`, the
+// foreground escape is emitted only when the colour changes.
 i32 render_frame(u8* out, f64 cx, f64 cy, f64 width, i32 max_iter, bool color) {
-    f64 height = width * g_rows / g_cols * 2.0;
+    f64 height = width * g_rows / g_cols * 2.0;   // cells are ~2x taller than wide
     f64 x0 = cx - width  * 0.5;
     f64 y0 = cy - height * 0.5;
     f64 dx = width  / g_cols;
@@ -153,7 +137,7 @@ i32 render_frame(u8* out, f64 cx, f64 cy, f64 width, i32 max_iter, bool color) {
         for i32 rx = 0; rx < g_cols; rx++ {
             f64 px = x0 + rx * dx;
             f64 nu = mandel_iter(px, py, max_iter);
-            // Glyph: clamp + quantize the integer part of nu.
+            // glyph from the integer part of nu
             i32 it_q = cast(i32, nu);
             if it_q < 0 { it_q = 0; }
             if it_q > max_iter { it_q = max_iter; }
@@ -180,17 +164,15 @@ i32 render_frame(u8* out, f64 cx, f64 cy, f64 width, i32 max_iter, bool color) {
 
 // ----- Main animation loop --------------------------------------------------
 
-// Centre viewport from frame 0.
+// zoom target
 const f64 TARGET_CX = -0.7756838;
 const f64 TARGET_CY = 0.1364674;
 const f64 ZOOM_PER_FRAME = 0.985;     // ~46 frames per 2× zoom
 const i32 N_FRAMES = 480;             // ~16s at 30fps
 
-// Refresh g_cols / g_rows / g_buf_len from the host terminal. Zero
-// fields are left untouched so wasm's JS-supplied dimensions and
-// pipe-failure defaults both survive. The -1 on rows leaves room for
-// the trailing newline so the frame doesn't scroll each paint. Floors
-// of 40×16 keep the demo readable in tiny windows.
+// Refresh the grid from the host terminal. Zero fields keep their
+// current value (wasm-supplied size, or the defaults). One row is
+// reserved for the trailing newline so the frame does not scroll.
 void detect_term_size() {
     TermSize sz = term_size();
     if sz.cols > 0 { g_cols = sz.cols; }
@@ -201,8 +183,8 @@ void detect_term_size() {
     g_buf_len = g_cols * g_rows * 12 + g_rows * 4 + 64;
 }
 
-// Async-signal-safe handler — restores cursor + colour, exits.
-// write() and exit() are signal-safe; print() is not.
+// Signal handler: restore cursor and colour, exit. write() is
+// signal-safe; print() is not.
 when os(macos) || os(ios) || os(linux) || os(android) {
     void on_term_signal(i32 sig) {
         write(stdout(), "\x1b[0m\x1b[?25h\n", 11);
@@ -211,17 +193,14 @@ when os(macos) || os(ios) || os(linux) || os(android) {
 }
 
 when os(wasm) {
-    // Seed terminal dimensions before main runs. The playground
-    // measures its output panel and calls this; detect_term_size's
-    // wasm path is a no-op, so the values survive.
+    // Called by the playground with its panel size before main().
     export i32 set_term_size(i32 cols, i32 rows) {
         if cols > 0 { g_cols = cols; }
         if rows > 0 { g_rows = rows; }
         return 0;
     }
 
-    // One frame per call. The playground rAFs this; returns 1
-    // after N_FRAMES so the rAF loop stops.
+    // One frame per call; returns 1 when done.
     export i32 frame() {
         if g_wasm_f >= N_FRAMES {
             return 1;
@@ -230,7 +209,7 @@ when os(wasm) {
         i32 idx = buf_append(g_wasm_buf, 0, "\x1b[H");
         i32 cells = render_frame(g_wasm_buf + idx, TARGET_CX, TARGET_CY, g_wasm_width, max_iter, true);
         idx = idx + cells;
-        // Reset fg so the next frame's first cell paints in a known state.
+        // reset fg for the next frame
         idx = buf_append(g_wasm_buf, idx, "\x1b[0m");
         write(stdout(), g_wasm_buf, idx);
         g_wasm_width = g_wasm_width * ZOOM_PER_FRAME;
@@ -243,15 +222,15 @@ i32 main() {
     // No-op outside legacy Windows cmd.
     term_enable_vt();
 
-    // Read the terminal size before allocating the frame buffer —
-    // a maximised window can want >100 KB.
+    // Size the frame buffer from the terminal; a large window needs
+    // over 100 KB.
     detect_term_size();
 
-    // Heap-allocated: WASM's linear-memory stack is only 64 KB.
+    // Heap: the wasm stack is 64 KB.
     u8* frame_buf = alloc<u8>(g_buf_len);
 
     when os(wasm) {
-        // Stash state for frame() and hand back to JS.
+        // hand off to frame()
         g_wasm_buf = frame_buf;
         g_wasm_width = 4.0;
         g_wasm_f = 0;
@@ -259,12 +238,10 @@ i32 main() {
         return 0;
     }
     else {
-        // WASM linear memory is reclaimed when the page tears down.
-        // free for all native platforms, would be reclaimed on exit.
         defer free(frame_buf);
 
-        // Hide the cursor for the run. defer restores on normal return;
-        // the signal handler covers Ctrl+C.
+        // Hide the cursor; defer restores it on return, the signal
+        // handler on Ctrl-C.
         when os(macos) || os(ios) || os(linux) || os(android) {
             signal(2,  cast(void*, &on_term_signal));   // SIGINT
             signal(15, cast(void*, &on_term_signal));   // SIGTERM
@@ -280,14 +257,11 @@ i32 main() {
         for i32 f = 0; f < N_FRAMES; f++ {
             i64 frame_start = qpc();
 
-            // More iter as the view shrinks: boundary detail keeps up
-            // with the geometric zoom.
+            // more iterations as the zoom deepens
             i32 max_iter = 80 + f * 2;
 
-            // One write per frame: [sync-begin][home][cells][sync-end].
-            // DEC ?2026 lets supporting terminals (Windows Terminal,
-            // iTerm2, kitty, ghostty) present the frame atomically;
-            // others ignore the CSI.
+            // One write per frame, wrapped in DEC 2026 synchronized
+            // output; terminals without it ignore the escape.
             i32 idx = buf_append(frame_buf, 0, "\x1b[?2026h\x1b[H");
             i32 cells = render_frame(frame_buf + idx, TARGET_CX, TARGET_CY, width, max_iter, true);
             idx = idx + cells;
