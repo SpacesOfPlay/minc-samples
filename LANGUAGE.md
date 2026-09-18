@@ -311,6 +311,11 @@ s.data                          // raw u8 pointer
 `str` is a built-in struct `{ u8* data; i32 len }`, a non-owning view.
 String literals are type `str`. Not null-terminated by default.
 
+String literals are read-only. Identical literals share one copy, and on
+native targets the bytes live in the executable's code section, so a
+store through a literal's pointer faults. Copy into a `string` or a
+buffer to modify text.
+
 Copying a `str` copies the pointer and length (16 bytes), not the underlying data.
 Functions that only read strings should take `str` parameters.
 
@@ -862,6 +867,13 @@ The block as a whole follows the same LIFO order as single-statement
 they would skip later defers. Loops nested inside the deferred body
 can still `break` / `continue` against their own loop.
 
+Leaving blocks early runs their defers. `return` evaluates its value,
+then runs every pending defer in the function; a defer that writes the
+returned variable does not change the value. `break` and `continue` run the defers of each
+block they leave, innermost first, out to the body of the loop they
+target (a labeled one included). `break case` and `fallthrough` do the
+same out to the case body.
+
 `defer free(x)` ownership tracking applies only to the single-
 statement form. `defer { free(a); free(b); }` does not mark `a` or
 `b` as defer-freed. Use one `defer free(x);` per resource for the
@@ -983,7 +995,7 @@ Available `arch` values: `x64`, `arm64`, `wasm32`.
 ### Compiler version
 
 ```c
-@minc_min_version "0.9.14"      // refuse to compile with anything older
+@minc_min_version "0.9.15"      // refuse to compile with anything older
 
 when MINC_VERSION >= 9011 { ... }   // gate on the running compiler
 ```
@@ -991,7 +1003,7 @@ when MINC_VERSION >= 9011 { ... }   // gate on the running compiler
 `@minc_min_version` : the oldest compiler that can build the file.
 
 `MINC_VERSION` encoded as `major*1000000 + minor*1000 + patch`.
-0.9.14 is `9014`, 1.0.0 would be `1000000`.
+0.9.15 is `9015`, 1.0.0 would be `1000000`.
 
 ## Expressions
 
@@ -1405,6 +1417,29 @@ bytes on every target, which covers any scalar, any struct of them, and
 a 128-bit SIMD load. A stronger alignment needs an explicit aligned
 allocator.
 
+On Windows and macOS these call the C runtime allocator. On wasm,
+Linux and Android the heap is minc's own, `lib/mem_heap.mc`: a
+two-level segregated-fit allocator with quick lists for small blocks,
+O(1) alloc and free, blocks split on alloc and merged on free. The
+compiler compiles it into the program; it is not imported by hand.
+
+A program can supply its own allocator on any target by defining all
+three entry points. Every allocation the compiler emits, including
+`new`, `string`, `format` and dynamic arrays, then goes through them:
+
+```c
+void* __minc_alloc(i64 n);            // 16-aligned, uninitialized; null on failure
+void  __minc_free(void* p);           // p from __minc_alloc, or null
+void* __minc_realloc(void* p, i64 n); // C semantics; null on failure, p intact
+```
+
+Defining one or two of the three is an error. They must be thread-safe
+if the program uses threads, and they must not call `alloc` or anything
+that allocates. `import mem_heap;` on Windows or macOS opts into minc's
+allocator there. An allocator gets fresh memory from the environment
+through `void* __heap_grow(i64 n)`: at least `n` bytes, 16-aligned, or
+null.
+
 `alloc<T>(count)` and `new(T[count])` fold the `sizeof(T)` multiplication
 and the pointer cast into the builtin:
 
@@ -1449,7 +1484,7 @@ Supported format types: `i32`, `i64`, `u32`, `u64`, `f64`, `bool`, `str`, `strin
 void exit(i32 code)
 void abort()                     // terminate abnormally, no status
 i32 get_argc()
-u8* get_arg(i32 index)           // null if out of range
+u8* get_arg(i32 index)           // null if out of range; owned by the runtime, never freed
 ```
 
 `exit` is a normal exit with return value `code`. 
@@ -1690,8 +1725,8 @@ f32 total = sum8(acc);
 ### Threading (builtins)
 
 ```c
-i64 thread_create(fn(void*): void entry, void* arg)
-void thread_join(i64 tid)
+void thread_create(Thread* t, fn(void*): void entry, void* arg)
+void thread_join(Thread* t)
 void thread_sleep(i32 ms)
 void mutex_init(void* m)
 void mutex_lock(void* m)
@@ -1862,10 +1897,12 @@ void worker(void* arg) {
 }
 
 i32 main() {
-    i64 t1 = thread_create(worker, cast(void*, cast(i64, 1)));
-    i64 t2 = thread_create(worker, cast(void*, cast(i64, 2)));
-    thread_join(t1);
-    thread_join(t2);
+    Thread t1;
+    Thread t2;
+    thread_create(&t1, worker, cast(void*, cast(i64, 1)));
+    thread_create(&t2, worker, cast(void*, cast(i64, 2)));
+    thread_join(&t1);
+    thread_join(&t2);
     return 0;
 }
 ```
@@ -2035,34 +2072,43 @@ minc app.mc --link libhelper.dylib -o app
 
 ### Exposing minc functions to C
 
-When a minc function is registered as a callback in a C library or
-installed as an Objective-C method, it must follow the platform's C ABI
-so struct arguments and return values are decoded correctly.
+A minc function registered as a callback in a C library, installed as an
+Objective-C method, or exported from a shared library needs no annotation.
+Struct arguments and return values follow the platform's C ABI in every
+minc function on every native target:
 
-The compiler detects this automatically when the function's address flows
-into a C-shaped destination:
+- **ARM64** (macOS, iOS, Linux, Android): AAPCS64. An HFA struct of 1-4
+  same-type floats (`NSPoint`, `NSSize`, `NSRect`, `CGSize`, …) passes in
+  V0-V7 and returns in V0-V3; a 9-16 byte non-HFA struct (`NSRange`, …)
+  passes in an X-register pair.
+- **Linux x64**: the System V eightbyte classification. A struct up to 8
+  bytes passes in one GPR or XMM by its class, 9-16 bytes in a register
+  pair, and anything larger by value on the stack.
+- **Windows x64**: a 1, 2, 4 or 8-byte struct passes by value in one
+  register; larger structs pass by pointer.
 
-- `cast(void*, &fn)` or `cast(void*, fn)`
-- `&fn` assigned to a `void*` variable or struct field
-- `&fn` passed as an argument whose corresponding parameter is `void*`
-- `&fn` passed to an `extern` function
-
-For indirect chains the compiler can't track (for example, `&fn` stored
-in a same-typed minc fn-ptr field that is later copied into a `void*`
-field), use the explicit `@c_abi` annotation on the function declaration:
+Sender and receiver use that convention for direct, indirect, and
+cross-image calls alike, so this example needs nothing declared on it:
 
 ```c
-@c_abi
 void my_method_impl(NSRect rect, u64 flags) {
-    // receives the NSRect correctly per the C ABI
+    // receives the NSRect per AAPCS64, in V0-V3
 }
 ```
 
-Cases that typically need the C ABI: callbacks taking or returning a
-small struct of floats (`NSPoint`, `NSSize`, `NSRect`, `CGRect`, …) or a
-9-16 byte non-float struct (`NSRange`, …). Callbacks with only pointer
-or scalar parameters use the same convention either way and need no
-annotation.
+It is the convention rather than an opt-in because a function pointer
+that reaches minc across an image boundary, through a symbol lookup or a
+vtable built at run time, involves no source-level `&fn` for a compiler to
+notice. Both sides have to agree without being told, so both key on the
+target rather than on a marking.
+
+Vector builtins need a little care: `float4`, `int4`, `f32x8` and friends
+are internal SIMD types with no portable C calling convention, so an
+`extern` declaration carrying one is rejected rather than silently
+miscompiled. Pass a matching struct instead, or assert the signature
+yourself with a fn-pointer cast, which is how the jit tests hand `float4`
+and `int4` across an image boundary. Passing them between minc functions
+is unaffected.
 
 ## Shaders
 
@@ -2500,9 +2546,14 @@ minc [build|run] [debug] <input.mc> [options]
 --def <file.def>        Load additional .def file for DLL mapping (Windows)
 --unchecked             Disable bounds checking
 --no-dce                Keep all top-level functions (disable dead code elimination)
+--hash                  Print the output's SHA-256 (a `hash` record under --agent=json)
+--deps <file>           Write the source files the compile read, one per line
+--track-alloc           Count allocations and report what is live at exit (see "Leak check")
 -DFLAG                  Define compile-time flag
 -DFLAG=value            Define with value
 --no-color              Disable colored diagnostics
+--color                 Keep colour and source excerpts when stderr is not a terminal
+--agent                 Agent mode: one line per diagnostic; sets MINC_AGENT=1 for child processes
 --list-builtins         List built-in Windows API symbols
 --version               Print compiler version
 ```
@@ -2510,6 +2561,336 @@ minc [build|run] [debug] <input.mc> [options]
 Standard Windows API symbols (kernel32, user32, gdi32, ucrtbase, d3d11, ole32,
 shell32) are built into the compiler; no `--def` flags needed for common APIs.
 Run `minc --list-builtins` to see all 263 available symbols.
+
+### Diagnostics on a terminal, a pipe, or under an agent
+
+On a terminal a diagnostic is coloured and shows the source line with a
+caret. When stderr is a pipe or a file, both are dropped and each
+diagnostic is one line:
+
+```
+app.mc:12:9: error: initializer type mismatch
+1 error(s) found
+```
+
+`NO_COLOR` in the environment disables the colour only. `MINC_AGENT=1`
+in the environment, or `--agent` on the command line, selects the
+one-line form on any stream. `--agent` also sets `MINC_AGENT=1` for the
+processes the compiler starts (a `build.mc`, the test runner, the
+program `minc run` launches). `--agent=json` sets `MINC_AGENT=json` the
+same way. `MINC_AGENT=0` turns agent mode off. `--color` keeps the
+terminal form on a pipe.
+
+In agent mode a diagnostic the compiler knows how to repair carries the
+repair on its line:
+
+```
+app.mc:3:9: error: initializer type mismatch [fix: wrap 3:13-14 in cast(i32, ...)]
+app.mc:4:5: warning: result of 'f' is unused; wrap in 'ignore ...;' to silence [fix: insert "ignore " at 4:5]
+app.mc:2:9: warning: unused variable 'x' [fix: delete line 2]
+```
+
+Under `MINC_AGENT=json` or `--agent=json` every line the compiler would
+write to stderr is one JSON object. A diagnostic is
+
+```
+{"kind":"error","file":"app.mc","line":3,"col":9,"code":"type-mismatch",
+ "message":"initializer type mismatch",
+ "fix":{"kind":"wrap","line":3,"col":13,"end_col":14,"before":"cast(i32, ","after":")"}}
+```
+
+`kind` is `error`, `warning` or `note`. `code` is present where the
+compiler classifies the diagnostic: `type-mismatch`, `sign-mismatch`,
+`unused-variable`, `must-use`, `unreachable`, `syntax`. `fix` is present
+for the mechanical repairs: `wrap` puts `before` and `after` around the
+expression at `line:col` (`end_col` is one past the span when the
+expression is a single identifier), `insert` puts `text` at `line:col`,
+`delete_line` removes the line. A failed compile ends with
+`{"kind":"summary","errors":N}`, a successful one with
+`{"kind":"output","file":"app.exe","bytes":N,"lines":N}`. Other text
+arrives as `{"kind":"note","message":"..."}`. `minc query` prints its
+records in the same mode.
+
+### Running a program: `minc run`
+
+`minc run app.mc` builds and runs the program. The binary is staged
+under `build/` in the working directory (`-o` picks another place; a
+wasm run stages in the system temp directory and serves it from there).
+Arguments after `--` go to the program. `minc run` returns the program's
+exit status. When the program dies of a fault, `minc run` names it:
+
+```
+crash: access violation (minc debug app.mc shows where)
+```
+
+`--timeout N` kills the program after N seconds with exit status 124.
+`--memory N` caps it at N MB (a job object on Windows, `RLIMIT_AS`
+elsewhere). In agent mode the run ends with a summary line:
+
+```
+run: exit 3 in 0.039 s, peak 3592 KB
+run: exit 0xc0000005 in 0.092 s, peak 3092 KB, access violation
+```
+
+and under `--agent=json` with a record, on every run:
+
+```
+{"kind":"run","exit":3,"ms":39,"peak_kb":3592}
+{"kind":"run","exit":124,"ms":1014,"peak_kb":3576,"timeout":true}
+{"kind":"run","exit":139,"ms":8,"peak_kb":3056,"signal":"access_violation"}
+{"kind":"run","exit":-1073741819,"ms":92,"peak_kb":3092,"signal":"access_violation","status":"0xc0000005"}
+```
+
+`signal` is one of `access_violation`, `bus_error`, `arithmetic`,
+`illegal_instruction`, `abort`, `breakpoint`, `stack_overflow`,
+`killed`, `terminated`, `broken_pipe`, or `signal_N` /
+`exception_<hex>` for anything else. On Windows a fault's exit code is
+the NT status: `exit` holds it as the number a shell sees and `status`
+repeats it in hex.
+
+### Leak check: `--track-alloc`
+
+`--track-alloc` builds the program with two counters, bumped by every
+heap allocation and non-null `free` — `alloc`, `alloc<T>`, `new`, and
+the allocations builtins make on their own (`format`, `string()`,
+string builder growth) — readable in the program
+as `alloc_live()` and `alloc_total()` (both 0 without the flag).
+`realloc` moves neither. When `main` returns, the program reports. On a
+terminal, one line on stderr when something is still live:
+
+```
+leak: 1 live of 2 allocations
+```
+
+Under `--agent=json`, a record on every run:
+
+```
+{"kind":"leak","live":1,"total":2}
+```
+
+The report follows the compile's mode. A program that leaves `main`
+through `exit()` gives none. `minc run app.mc --track-alloc` and
+`minc test --track-alloc` build tracked programs and tests; with a
+`build.mc` the flag reaches the script's compiles too. The compiler's
+own runtime allocations are not counted.
+
+### Debugging a program: `minc debug`
+
+`minc debug app.mc [-- args]` builds with `-g -Og` and opens the result
+in `minc-dbg`, installed beside the compiler: breakpoints, stepping,
+`bt`, `print`. A crash stops there with the faulting context; `c` lets
+the program die of it.
+
+`minc debug --batch app.mc` runs the program to its end with no prompt.
+A crash prints the fault and the backtrace and exits with the program's
+status:
+
+```
+crash: access violation at 0x401042
+  #0  depth at rec.mc:2
+  #1  depth at rec.mc:3
+  #2  depth at rec.mc:3
+  #3  depth at rec.mc:3
+  #4  main at rec.mc:7
+```
+
+Under `--agent=json` the same run gives one record for the crash and
+one for the exit:
+
+```
+{"kind":"crash","signal":"access_violation","pc":"0x401042","frames":[{"fn":"depth","file":"rec.mc","line":2},{"fn":"depth","file":"rec.mc","line":3},{"fn":"depth","file":"rec.mc","line":3},{"fn":"depth","file":"rec.mc","line":3},{"fn":"main","file":"rec.mc","line":7}]}
+{"kind":"run","exit":-1073741819,"status":"0xc0000005"}
+```
+
+`pc` is the faulting instruction's address. A frame's `file` is the
+source path as the compiler was given it. An inlined function reports
+under its caller's name with its own line. The same batch mode is
+`minc-dbg --batch [--json] <exe>` on any binary built with `-g`.
+
+### Profiling a program: `minc profile`
+
+`minc profile app.mc [--seconds N] [-- args]` builds with `-g` (no
+codegen change) and runs the program with its instruction pointer
+sampled about a thousand times a second. When the program exits, or
+after N seconds, the functions are listed by share, most first:
+
+```
+samples: 1095
+ 79.1%     867  quick_sort
+ 18.3%     201  insertion_sort
+  2.4%      27  main
+```
+
+Time in system code (the allocator, file reads) is listed as
+`<outside .text>`. Under `--agent=json` the run gives one record:
+
+```
+{"kind":"profile","samples":1095,"ms":1674,"exit":0,"functions":[{"fn":"quick_sort","samples":867,"pct":79.1},{"fn":"insertion_sort","samples":201,"pct":18.3},{"fn":"main","samples":27,"pct":2.4}]}
+```
+
+The sampler is `minc-dbg --profile [--json] [--seconds N] <exe>` on
+any binary built with `-g`; a binary without line tables reports every
+sample as outside. Only the main thread is sampled.
+
+### Running the tests: `minc test`
+
+In a project without a `build.mc`, `minc test` compiles every
+`test/*.mc`, runs each, and counts an exit status of 0 as a pass. The
+binaries go under `build/test/`. On a terminal every test gets a line;
+a failing test's output follows its line:
+
+```
+  FAIL  test_math (exit 1)
+expected 4, got 5
+  PASS  test_ok
+  FAIL  test_types (compile)
+test/test_types.mc:3:9: error: initializer type mismatch
+1 passed, 2 failed
+```
+
+In agent mode the passes are a count in the results line and only the
+failures get a line. Under `--agent=json` every test is one record with
+the compile and run time, the exit status, and the captured output of a
+failure or a failing compile's diagnostic records; the run ends with a
+results record:
+
+```
+{"kind":"test","name":"test_math","status":"fail","ms":59,"exit":1,"output":"expected 4, got 5\n"}
+{"kind":"test","name":"test_ok","status":"pass","ms":353}
+{"kind":"test","name":"test_types","status":"fail","reason":"compile","diagnostics":[{"kind":"error","file":"test/test_types.mc","line":3,"col":9,"code":"type-mismatch","message":"initializer type mismatch","fix":{"kind":"wrap","line":3,"col":13,"end_col":14,"before":"cast(i32, ","after":")"}},{"kind":"summary","errors":1}]}
+{"kind":"results","passed":1,"failed":2,"unchanged":0}
+```
+
+`--filter <text>` runs the tests whose name contains the text.
+`--timeout N` kills a test after N seconds; its record says
+`"reason":"timeout"`. `--changed` runs only the tests an edit reaches:
+each compile writes the files it read to `build/test/<name>.d`, a pass
+leaves `build/test/<name>.ok`, and a test runs again when it has no
+stamp or any file in its list is newer than the stamp or gone. The
+others count as `unchanged`. The same list is available to any compile
+as `--deps <file>`.
+
+With a `build.mc` the verb and its flags go to the script, which
+reports in its own shape. This repository's battery prints the same
+lines and records through `MINC_AGENT`, one record per test and one
+per scope, and rejects `--changed`.
+
+`lib/test_framework.mc` provides the above as a module:
+
+```c
+import test_framework;
+
+i32 main() {
+    str verb = str_from_cstr(get_arg(1));
+    if str_equal(verb, "test") { return test_run_dir("test"); }
+    ...
+}
+```
+
+`test_run_dir` compiles and runs every `.mc` in the directory, reads
+`--filter`, `--changed` and `--timeout` off the command line, and
+follows `MINC_AGENT` for the output shape. A suite that is not one
+binary per file reports through `test_begin`, `test_report`,
+`test_report_fail` and `test_finish`, which write the same records. The
+compiler it spawns comes from `MINC`, then `PATH`.
+
+### The source index: `minc query`
+
+`minc query` answers from the index the language server keeps: a
+reference is an identifier the parser resolved, not a substring. It
+scans the working directory (or `--root <dir>`), skipping what the
+root's `.gitignore` lists, `build`, and directories starting with a
+dot, and prints one tab-separated record per line, sorted by file and
+position, with paths relative to the root. It needs `minc-lsp` beside
+the compiler.
+
+```
+minc query def <name>        definitions; Struct.field names a field
+minc query refs <name>       reference sites, each with the declaration holding it
+minc query callers <name>    functions whose bodies reference it, with site counts
+minc query symbols <text>    definitions whose name contains the text
+minc query defines <name>    the files that define it
+minc query closure <file>    every file a compile of the file reads
+```
+
+| option | meaning |
+|---|---|
+| `--root <dir>` | the tree to index; default the working directory |
+| `--target <t>` | the platform whose `when` arms the index holds, named as for the compiler; default this machine |
+| `--agent=json` | one JSON record per line, before or after the verb |
+
+```
+$ minc query callers helper
+main.mc:2:5	caller	other	1
+main.mc:3:5	caller	main	2
+$ minc query def helper --agent=json
+{"kind":"def","file":"util.mc","line":2,"col":5,"symbol":"helper","node":"function"}
+```
+
+| record | text form | JSON fields |
+|---|---|---|
+| definition (`def`, `symbols`) | `util.mc:2:5 function helper`, then `private` or `forward` when so | `kind` def, `file`, `line`, `col`, `symbol`, `node`, `private`, `forward` |
+| reference (`refs`) | `main.mc:2:27 ref helper other` | `kind` ref, `file`, `line`, `col`, `symbol`, `in` |
+| caller (`callers`) | `main.mc:3:5 caller main 2` | `kind` caller, `file`, `line`, `col`, `symbol`, `caller`, `sites` |
+| file (`defines`, `closure`) | `util.mc` | `kind` file, `file` |
+| nothing found, on stderr | `no references to lonely (defined at util.mc:3:5)`, `no symbol named missing` | `kind` empty, `query`, `symbol`, `known`, and the definition's `file`, `line`, `col` when known |
+| a file the index could not parse, on stderr | `note: broken.mc:2:24: not indexed (expected expression), mentions helper` | `kind` note, `file`, `line`, `col`, `error`, `mentions` |
+
+A name defined more than once: each site binds to the definition in
+its own file, else to a public one in a program the file belongs to,
+and `refs` and `callers` records name it as `of file:line` (JSON
+`of`). `file:name` in place of the name asks about that definition
+alone:
+
+```
+$ minc query callers src/vm.mc:def_method
+src/vm.mc:3850:13	caller	vm_execute	2	of src/vm.mc:2185
+```
+
+The exit status is 0 with results, 1 with none, and 2 for a bad
+command line. The index holds top-level declarations (functions,
+externs, structs, unions, enums and their members, globals, type
+aliases, struct fields), not locals; the modules the tree imports from
+outside it, the standard library included; and one platform's `when`
+arms, so `closure`, `refs` and `callers` answer for that platform while
+`def` and `symbols` list every file's declarations. A file with a
+syntax error holds no entries, and the `note` names it when its text
+mentions the name asked about.
+
+### The agent server: `minc agent`
+
+`minc agent` is a Model Context Protocol server over stdio: JSON-RPC
+2.0, one object per line, `initialize`, `tools/list`, `tools/call`,
+`ping`. For Claude Code:
+
+```
+claude mcp add minc -- minc agent
+```
+
+The project is the client's first root when the client offers the MCP
+`roots` capability (the server asks `roots/list` after the handshake
+and again when the list changes), else the working directory the
+server was started in. `--root <dir>` pins it. The server runs in
+`minc-lsp` beside the compiler. The first call indexes the project;
+later calls re-index only the files whose modification time or size
+changed. A root change drops the index and scans the new one.
+
+| tool | arguments | result |
+|---|---|---|
+| `query` | `what` (def, refs, callers, symbols, defines, closure), `name`, `target` (as `--target`; a change rebuilds the index) | the `minc query` records, one per line |
+| `compile` | `file`, `output`, `flags`, `hash` | the diagnostic records, with codes and fixes, then the summary or output record; `hash` adds the `hash` record |
+| `run` | `file`, `args`, `timeout`, `memory`, `flags` | the program's output, then the `run` record |
+| `debug` | `file`, `args` | `minc debug --batch`: the `crash` record with the backtrace, then the `run` record |
+| `profile` | `file`, `args`, `seconds` | `minc profile`: the `profile` record, functions by share |
+| `test` | `scope`, `flags` | one record per test and the results record; `--filter`, `--changed`, `--timeout` go in `flags` |
+
+Every result is one text block. `isError` is set when the command's
+exit status was nonzero: for `compile` that means diagnostics, for
+`run` that the program failed or crashed. `compile`, `run`, `debug`
+and `profile` act on the file they name even in a project with a
+`build.mc`; `test` is the project's. The same server is
+`minc-lsp --agent [--root <dir>] [--minc-exe <path>] [--target <t>]`
+on its own.
 
 ### Cross-compilation targets
 

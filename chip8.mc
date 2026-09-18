@@ -389,7 +389,7 @@ void init() {
         .width = CHIP8_W,
         .height = CHIP8_H,
         .pixel_format = SG_PIXELFORMAT_RGBA8,
-        .usage.stream_update = true,
+        .usage.write_transient = true,
     });
 
     tex_smp = sg_make_sampler(&sg_sampler_desc{
@@ -441,9 +441,10 @@ void frame() {
 
     update_pixels();
 
-    sg_update_image(tex_img, &sg_image_data{
-        .mip_levels[0].ptr = pixels,
-        .mip_levels[0].size = CHIP8_W * CHIP8_H * 4,
+    sg_write_image_transient(&sg_write_image_desc{
+        .src.data.ptr = pixels,
+        .src.data.size = CHIP8_W * CHIP8_H * 4,
+        .dst.image = tex_img,
     });
 
     sg_begin_pass(&sg_pass{

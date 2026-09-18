@@ -503,7 +503,7 @@ void init() {
         .width = IMG_W,
         .height = IMG_H,
         .pixel_format = SG_PIXELFORMAT_RGBA8,
-        .usage.stream_update = true,
+        .usage.write_transient = true,
     });
 
     g_tex_smp = sg_make_sampler(&sg_sampler_desc{
@@ -517,7 +517,7 @@ void init() {
     // letterbox the image.
     g_quad_vbuf = sg_make_buffer(&sg_buffer_desc{
         .size = 24 * 4,
-        .usage.stream_update = true,
+        .usage.write_transient = true,
     });
 
     sg_shader shd = sokol_make_shader(&quad_vs_shader, &quad_fs_shader);
@@ -526,12 +526,11 @@ void init() {
         .layout.attrs[0].format = SG_VERTEXFORMAT_FLOAT2,
         .layout.attrs[1].format = SG_VERTEXFORMAT_FLOAT2,
     });
-
-    update_quad_for_aspect();
 }
 
 // Letterbox: shrink the quad along the framebuffer's long axis so the
-// image keeps its aspect; the clear color fills the bars.
+// image keeps its aspect; the clear color fills the bars. The quad
+// buffer is write-transient, so it is rewritten every frame.
 void update_quad_for_aspect() {
     f32 fb_w = cast(f32, sapp_width());
     f32 fb_h = cast(f32, sapp_height());
@@ -549,8 +548,11 @@ void update_quad_for_aspect() {
          sx, -sy, 1.0f, 1.0f,
         -sx, -sy, 0.0f, 1.0f,
     };
-    sg_range data = sg_range{ .ptr = &quad, .size = sizeof(quad) };
-    sg_update_buffer(g_quad_vbuf, &data);
+    sg_write_buffer_transient(&sg_write_buffer_desc{
+        .src.data.ptr = &quad,
+        .src.data.size = sizeof(quad),
+        .dst.buffer = g_quad_vbuf,
+    });
 }
 
 void frame() {
@@ -610,9 +612,11 @@ void frame() {
     for i32 i = 0; i < n; i++ { sem_wait(&g_all_done); }
 
     // Upload + draw
-    sg_update_image(g_tex_img, &sg_image_data{
-        .mip_levels[0].ptr = g_pixels,
-        .mip_levels[0].size = IMG_W * IMG_H * 4,
+    update_quad_for_aspect();
+    sg_write_image_transient(&sg_write_image_desc{
+        .src.data.ptr = g_pixels,
+        .src.data.size = IMG_W * IMG_H * 4,
+        .dst.image = g_tex_img,
     });
 
     sg_begin_pass(&sg_pass{
@@ -633,7 +637,6 @@ void frame() {
 
 void on_event(sapp_event* ev) {
     if ev.type == SAPP_EVENTTYPE_QUIT_REQUESTED { sapp_request_quit(); }
-    if ev.type == SAPP_EVENTTYPE_RESIZED { update_quad_for_aspect(); }
     return;
 }
 

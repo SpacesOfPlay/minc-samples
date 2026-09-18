@@ -353,7 +353,7 @@ void init() {
         .width = IMG_W,
         .height = IMG_H,
         .pixel_format = SG_PIXELFORMAT_RGBA8,
-        .usage.stream_update = true,
+        .usage.write_transient = true,
     });
 
     // nearest sampling keeps the pixels sharp
@@ -399,9 +399,10 @@ void frame() {
     render_scanlines(10);
 
     // Upload pixel data to texture
-    sg_update_image(tex_img, &sg_image_data{
-        .mip_levels[0].ptr = pixels,
-        .mip_levels[0].size = IMG_W * IMG_H * 4,
+    sg_write_image_transient(&sg_write_image_desc{
+        .src.data.ptr = pixels,
+        .src.data.size = IMG_W * IMG_H * 4,
+        .dst.image = tex_img,
     });
 
     // Render full-screen quad

@@ -53,6 +53,7 @@ minc run raytracer.mc
 | `sokol_particles_compute.mc` | compute-driven particles |
 | `imgui_demo.mc` | Dear ImGui |
 | `json_export.mc` | JSON writing |
+| `mem_libc_demo.mc` | C library malloc (`lib/mem_libc.mc`, Linux x64) |
 | `web_server.mc` | HTTP server |
 | `shim_demo.mc` | linking C code (`minc run shim_demo.mc`, needs a C compiler) |
 | `hotreload/` | JIT: hot-reload minc scripts into a running engine via libminc |

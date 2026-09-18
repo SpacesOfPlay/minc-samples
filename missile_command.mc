@@ -868,7 +868,7 @@ void init() {
     // Dynamic vertex buffer (stream usage for per-frame updates)
     vbuf = sg_make_buffer(&sg_buffer_desc{
         .size = MAX_VERTS * 32, // 8 floats * 4 bytes each
-        .usage.stream_update = true,
+        .usage.write_transient = true,
     });
 
     // Game pipeline — writes into the offscreen RT (RGBA8, no depth).
@@ -987,8 +987,16 @@ void frame() {
     }
     render_game();
 
-    // Upload vertices
-    sg_update_buffer(vbuf, &sg_range{ .ptr = &verts, .size = vert_count * 32 });
+    // Upload vertices. A write-transient buffer must receive at least one
+    // non-empty write in any frame that draws from it, so an empty frame
+    // skips both the upload and the draw.
+    if vert_count > 0 {
+        sg_write_buffer_transient(&sg_write_buffer_desc{
+            .src.data.ptr = &verts,
+            .src.data.size = vert_count * 32,
+            .dst.buffer = vbuf,
+        });
+    }
 
     // ----- Pass 1: game into the offscreen RT, which is the game space;
     // no viewport -----
@@ -997,11 +1005,13 @@ void frame() {
         .action.colors[0].clear_value = sg_color{ 0.02f, 0.02f, 0.08f, 1.0f },
         .attachments.colors[0] = rt_color_view,
     });
-    sg_apply_pipeline(pip);
-    sg_apply_bindings(&sg_bindings{ .vertex_buffers[0] = vbuf });
-    float4x4 ortho = make_ortho();
-    sg_apply_uniforms(0, &sg_range{ .ptr = &ortho, .size = sizeof(ortho) });
-    sg_draw(0, vert_count, 1);
+    if vert_count > 0 {
+        sg_apply_pipeline(pip);
+        sg_apply_bindings(&sg_bindings{ .vertex_buffers[0] = vbuf });
+        float4x4 ortho = make_ortho();
+        sg_apply_uniforms(0, &sg_range{ .ptr = &ortho, .size = sizeof(ortho) });
+        sg_draw(0, vert_count, 1);
+    }
     sg_end_pass();
 
     // ----- Bloom bright-pass: scene RT → bloom_a (quarter-res) -----
