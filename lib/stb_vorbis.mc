@@ -53,7 +53,6 @@ enum __enum_VORBIS_packet_id {
     VORBIS_packet_setup = 5,
 }
 
-// find definition of alloca if it's not in stdlib.h:
 type uint8 = u8;
 type int8 = i8;
 type uint16 = u16;

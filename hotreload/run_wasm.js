@@ -49,6 +49,7 @@ const nativeMinc = resolveExe(process.env.MINC || 'minc');
 if (!nativeMinc) fail('minc not found on PATH (install: https://minc.dev, or set MINC)');
 
 const wasmCompilerPath = process.env.MINC_WASM || path.join(path.dirname(nativeMinc), 'minc.wasm');
+const libDir = path.join(path.dirname(nativeMinc), 'lib');
 if (!fs.existsSync(wasmCompilerPath)) {
   fail('minc.wasm not found next to ' + nativeMinc + ' (it ships with the minc release; or set MINC_WASM)');
 }
@@ -111,7 +112,11 @@ function compileWeb(source) {
     open: (pathPtr, flags) => {
       const p = readCStr(inst.exports.memory, pathPtr).replace(/^\//, '');
       if (Number(flags) === 0) {
-        const data = vfs.get(p);
+        let data = vfs.get(p);
+        if (!data && p.startsWith('lib/') && !p.slice(4).includes('/')) {
+          // Library modules, the heap runtime included, come from the install's lib/.
+          try { data = fs.readFileSync(path.join(libDir, p.slice(4))); } catch (e) { data = null; }
+        }
         if (!data) return -1n;
         const fd = nextFd++;
         fdMap[fd] = { data, pos: 0 };

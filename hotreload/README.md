@@ -35,13 +35,16 @@ minc run hotreload/engine.mc
 ```
 
 `minc run` resolves libminc from the install dir (Windows via PATH,
-macOS/Linux via the run fallback). A binary built with `-o` and run
-by hand needs libminc next to it on macOS/Linux:
+macOS/Linux via the run fallback). A binary built with `-o` needs a
+bit more; on Windows the install dir is already on PATH, on 
+macOS/Linux point the loader at it:
 
 ```
 cd hotreload
 minc engine.mc -o hotreload_engine.exe
-cp "$(dirname "$(command -v minc)")"/libminc.* .
+sdk="$(dirname "$(command -v minc)")"
+export LD_LIBRARY_PATH="$sdk"             # Linux
+export DYLD_FALLBACK_LIBRARY_PATH="$sdk"  # macOS
 ./hotreload_engine.exe          # automated demo
 ./hotreload_engine.exe watch    # live: edit script.mc + save
 ```

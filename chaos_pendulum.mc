@@ -38,7 +38,7 @@ const f64 GRAV = 9.81;
 
 f64[3] PEND_LEN  = { 0.3, 0.27, 0.24 };   // metres
 f64[3] PEND_MASS = { 1.0, 0.8, 0.6 };
-f64[3] PEND_MSUM = { 2.4, 1.4, 0.6 };     // mass from link k down
+f64[3] PEND_MSUM;                         // mass from link k down
 
 struct PendState {
     f64[3] th;   // angle from the vertical, per link
@@ -55,6 +55,15 @@ void pend_reset(PendState* s) {
     for i32 i = 0; i < 3; i++ {
         s.th[i] = 2.356194490192345;
         s.om[i] = 0.0;
+    }
+}
+
+// M_k for every link, summed from the last link up.
+void pend_setup() {
+    f64 m;
+    for i32 i = 2; i >= 0; i-- {
+        m = m + PEND_MASS[i];
+        PEND_MSUM[i] = m;
     }
 }
 
@@ -686,13 +695,17 @@ void frame() {
     if ts < 1 { ts = 1; }
     f32 tsf = cast(f32, ts);
 
+    // hide hud when window is tiny
+    f32 dpi = sapp_dpi_scale();
+    bool hud = g_show_hud && cast(f32, w) >= 640.0f * dpi && cast(f32, h) >= 360.0f * dpi;
+
     // Pendulum in device pixels, one scale on both axes: the virtual canvas
     // stretches to the window and would draw the bobs as ellipses.
     f32 us = g_tsx;
     if g_tsy < us { us = g_tsy; }
     f32 top = 10.0f * g_tsy;
     f32 reach = REACH_MAX_BIG * us;
-    if g_show_hud {
+    if hud {
         top = (8.0f + 6.0f * 10.0f) * tsf + 6.0f * g_tsy;    // below the last text row
         reach = REACH_MAX_HUD * us;
     }
@@ -713,7 +726,7 @@ void frame() {
     draw_disc(px, py, 2.0f * us, COL_BLACK);
 
     // chart, on the virtual canvas
-    if g_show_hud {
+    if hud {
         sgl_load_identity();
         sgl_ortho(0.0f, 640.0f, 360.0f, 0.0f, -1.0f, 1.0f);
         draw_chart();
@@ -722,7 +735,7 @@ void frame() {
     // text, in device pixels
     sgl_load_identity();
     sgl_ortho(0.0f, cast(f32, w), cast(f32, h), 0.0f, -1.0f, 1.0f);
-    if g_show_hud { draw_hud(w, h, tsf); }
+    if hud { draw_hud(w, h, tsf); }
 
     sg_begin_pass(&sg_pass{ .action = g_pass_action, .swapchain = sglue_swapchain() });
     sgl_draw();
@@ -745,6 +758,7 @@ i32 run_check() {
     PendState a;
     PendState b;
     PendState c;
+    pend_setup();
     pend_reset(&a);
     pend_reset(&b);
     pend_reset(&c);
@@ -786,6 +800,7 @@ void init() {
             .clear_value = { COL_BLACK.r, COL_BLACK.g, COL_BLACK.b, 1.0f }
         },
     };
+    pend_setup();
     reset();
 }
 
