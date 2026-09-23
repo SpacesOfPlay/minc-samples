@@ -584,10 +584,8 @@ void build_shim_object() {
 }
 
 // --- Hot-reload demo ---------------------------------------------------
-// The engine loads libminc (the embeddable JIT) at launch; stage a copy
-// from the compiler's directory next to the engine binary so the
-// MINC-override and manual-zip layouts work.
-
+// The engine loads libminc (the embeddable JIT) at launch and compiles
+// scripts through it.
 i32 run_hotreload(bool watch) {
     string exe = join_named("build", "hotreload_engine", EXE_SUFFIX);
     defer free(exe);
@@ -595,19 +593,13 @@ i32 run_hotreload(bool watch) {
     ProcCmd c = { .args = { g_cc, "hotreload/engine.mc", "-o", exe } };
     if run_cmd(&c) != 0 || !path_exists(exe) { die("minc compile failed"); }
 
-    str cc_dir = path_dirname(g_cc);
+    // Remove any old staged files.
     str libname = "libminc.so";
     when os(windows) { libname = "libminc.dll"; }
     when os(macos) { libname = "libminc.dylib"; }
-    string lsrc = path_join(cc_dir, libname);
-    defer free(lsrc);
-    string ldst = path_join("build", libname);
-    defer free(ldst);
-    if path_exists(lsrc) {
-        ignore file_copy(lsrc, ldst);
-    } else if !path_exists(ldst) {
-        print("warning: libminc not found next to minc; the engine may fail to start\n");
-    }
+    string stale = path_join("build", libname);
+    defer free(stale);
+    if path_exists(stale) { ignore file_remove(stale); }
 
     print("Running hotreload engine...\n");
     ProcCmd run = { .args = { exe } };

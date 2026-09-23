@@ -1,7 +1,7 @@
 // raytracer_mt.mc — multi-threaded Whitted raytracer.
 //
-// Every frame is rendered in full. A persistent worker pool pulls
-// 32x32 tiles from an atomic counter; tiles are disjoint, so the
+// Every frame is rendered in full. lib/thread_pool.mc hands 32x32
+// tiles to a persistent worker pool; tiles are disjoint, so the
 // render needs no locks.
 //
 // Scene: red left wall, green right wall, white back wall, checker
@@ -11,8 +11,7 @@
 import sokol_all;
 import math;
 import linear;
-import thread;
-import atomic;
+import thread_pool;
 
 // ============================================================================
 // Configuration
@@ -30,7 +29,6 @@ when os(ios) {
     i32 IMG_H = 400;
 }
 
-i32 MAX_WORKERS = 16;
 i32 MAX_DEPTH = 2;
 f32 EPSILON = 0.001f;
 
@@ -92,8 +90,8 @@ float4 g_ambient;
 // Per-frame camera + worker scheduling
 // ============================================================================
 
-// Per-frame camera state. Written by frame() before the workers are
-// woken, read by every worker; the semaphore handshake orders the two.
+// Per-frame camera state. Written by frame() before the dispatch,
+// read by every worker.
 struct FrameState {
     float4 eye;
     float4 forward;
@@ -107,19 +105,7 @@ struct FrameState {
 }
 FrameState g_frame;
 
-// Tile queue: workers claim indices with atomic_add and stop at n_tiles.
-i32 g_next_tile;
-
-Thread[16] g_threads;
-i32      g_worker_count;   // determined at init() from cpu_count()
-
-// Persistent thread pool. g_work_ready[i] wakes worker i once per
-// frame; each worker signals g_all_done when the queue is empty and
-// main waits N times. g_pool_shutdown is checked after every wake so
-// cleanup() can end the loops.
-Semaphore[16]  g_work_ready;
-Semaphore      g_all_done;
-bool           g_pool_shutdown;
+ThreadPool g_pool;
 
 u8* g_pixels;
 f32 g_time;
@@ -369,7 +355,7 @@ float4 trace_path(Ray r, float4 eye) {
 }
 
 // ============================================================================
-// Worker: render tiles from the shared queue until it is empty.
+// Worker: render a range of tiles.
 // ============================================================================
 
 void render_tile(i32 tile_idx) {
@@ -418,23 +404,8 @@ void render_tile(i32 tile_idx) {
     return;
 }
 
-// Worker thread: wait for work_ready, drain the tile queue, signal
-// all_done. Exits when g_pool_shutdown is set.
-void worker_loop(void* arg) {
-    i32 id = cast(i32, cast(i64, arg));
-    while true {
-        sem_wait(&g_work_ready[id]);
-        if g_pool_shutdown { return; }
-        // atomic_add returns the claimed index. Relaxed ordering
-        // suffices: the counter carries no other data.
-        while true {
-            i32 t = atomic_add(&g_next_tile, 1, RELAXED);
-            if t >= g_frame.n_tiles { break; }
-            render_tile(t);
-        }
-        sem_signal(&g_all_done);
-    }
-    return;
+void render_tiles(void* ctx, i64 start, i64 end) {
+    for i64 t = start; t < end; t++ { render_tile(cast(i32, t)); }
 }
 
 // ============================================================================
@@ -483,20 +454,7 @@ void init() {
     memset(g_pixels, 32, IMG_W * IMG_H * 4);  // dark grey until first frame
 
     init_scene();
-
-    // Worker count: one per core, capped at MAX_WORKERS, and at IMG_H rows.
-    i32 n = cpu_count();
-    if n > MAX_WORKERS { n = MAX_WORKERS; }
-    if n > IMG_H { n = IMG_H; }
-    if n < 1 { n = 1; }
-    g_worker_count = n;
-
-    // Start the pool; each worker waits on its own semaphore.
-    sem_init(&g_all_done, 0);
-    for i32 i = 0; i < g_worker_count; i++ {
-        sem_init(&g_work_ready[i], 0);
-        thread_create(&g_threads[i], worker_loop, cast(void*, cast(i64, i)));
-    }
+    tp_init(&g_pool, 0);
 
     // Streaming texture for the rendered image
     g_tex_img = sg_make_image(&sg_image_desc{
@@ -603,13 +561,8 @@ void frame() {
     g_frame.n_tiles_y = (IMG_H + TILE_H - 1) / TILE_H;
     g_frame.n_tiles = g_frame.n_tiles_x * g_frame.n_tiles_y;
 
-    // Plain store: the workers are asleep, and sem_signal publishes it.
-    g_next_tile = 0;
-
-    // Wake the workers, then collect one done signal each.
-    i32 n = g_worker_count;
-    for i32 i = 0; i < n; i++ { sem_signal(&g_work_ready[i]); }
-    for i32 i = 0; i < n; i++ { sem_wait(&g_all_done); }
+    // One tile per claim: a tile is already a good unit of work.
+    parallel_for_chunk(&g_pool, g_frame.n_tiles, 1, render_tiles, null);
 
     // Upload + draw
     update_quad_for_aspect();
@@ -641,12 +594,7 @@ void on_event(sapp_event* ev) {
 }
 
 void cleanup() {
-    // Tear down the pool: tell workers to exit, then join them.
-    g_pool_shutdown = true;
-    for i32 i = 0; i < g_worker_count; i++ { sem_signal(&g_work_ready[i]); }
-    for i32 i = 0; i < g_worker_count; i++ { thread_join(&g_threads[i]); }
-    for i32 i = 0; i < g_worker_count; i++ { sem_destroy(&g_work_ready[i]); }
-    sem_destroy(&g_all_done);
+    tp_destroy(&g_pool);
     sg_shutdown();
     return;
 }

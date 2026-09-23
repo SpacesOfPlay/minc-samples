@@ -442,9 +442,9 @@ u8* cstr = str_to_cstr(s);           // str → null-terminated u8* (allocates)
 
 ```c
 i32 x = 42;                     // explicit type
-var y = 42;                     // type inference, integer literals default to i32 
-                                // unless they exceed the i32 range, in which case 
-                                // they become i64.
+var y = 42;                     // type inference, integer literals default to i32,
+                                // i64 above the i32 range and u64 above the i64
+                                // range (18446744073709551615, 0x8000000000000000)
 const i32 MAX = 100;            // compile-time constant
 i32 g_count = 0;                // global variable
 ```
@@ -868,8 +868,11 @@ they would skip later defers. Loops nested inside the deferred body
 can still `break` / `continue` against their own loop.
 
 Leaving blocks early runs their defers. `return` evaluates its value,
-then runs every pending defer in the function; a defer that writes the
-returned variable does not change the value. `break` and `continue` run the defers of each
+then runs every pending defer in the function. A returned scalar is
+read before the defers run, so a defer that writes the variable does not
+change the value; a returned struct, union or array is copied out after
+them, so a defer that writes one of its fields changes what the caller
+receives. `break` and `continue` run the defers of each
 block they leave, innermost first, out to the body of the loop they
 target (a labeled one included). `break case` and `fallthrough` do the
 same out to the case body.
@@ -1140,6 +1143,11 @@ Mixing signed and unsigned integer operands:
 | `>>` | Error (sign-sensitive: arithmetic vs logical shift) |
 | `&  \|  ^  <<`, same width | OK; the result takes the left operand's type |
 | Any operator vs an integer literal or enum member | OK; the literal coerces |
+
+A literal coerces to the other operand's type, and a fold of two
+literals takes the wider operand's type, the unsigned one on a tie.
+A decimal literal above the i64 range is a u64 and does not fit a
+signed target; a hex or binary pattern fills either 64-bit type.
 
 ```c
 i32 a = -1;
@@ -1438,7 +1446,7 @@ if the program uses threads, and they must not call `alloc` or anything
 that allocates. `import mem_heap;` on Windows or macOS opts into minc's
 allocator there. An allocator gets fresh memory from the environment
 through `void* __heap_grow(i64 n)`: at least `n` bytes, 16-aligned, or
-null.
+null. On `uefi-x64` the builtin calls `__minc_heap_grow(i64 n)`.
 
 `alloc<T>(count)` and `new(T[count])` fold the `sizeof(T)` multiplication
 and the pointer cast into the builtin:
@@ -1539,6 +1547,18 @@ simply ignored by the hardware) and it changes no program state.
 Use it a few iterations ahead when walking index lists into large
 records (the classic pattern: `prefetch(&records[indices[i + 8]])`).
 
+### Hardware entropy
+
+```c
+bool cpu_has_random()           // the CPU has a hardware entropy instruction
+bool cpu_random(u64* out)       // one 64-bit word from it; false if it could not
+```
+
+On x64 (Windows, Linux, UEFI) these are RDRAND: `cpu_has_random` is the
+CPUID bit, and `cpu_random` stores one word through `out` and returns
+true, or returns false with `*out` untouched when the CPU has no source.
+On arm64 and wasm both current return false. This is intended for kernel code.
+
 ### Math (builtins)
 
 ```c
@@ -1620,6 +1640,8 @@ wait until after the loop.
 | `accum4(i64x2 acc, int4 v)`  | `i64x2` | deferred sum; sign-extend lanes       |
 | `reduce4(u64x2)`             | `u64`   | final reduce of `accum4` carrier      |
 | `reduce4(i64x2)`             | `i64`   | final reduce of `accum4` carrier      |
+| `int4_to_float4(int4)`       | `float4`| per-lane signed int→float             |
+| `float4_to_int4(float4)`     | `int4`  | per-lane float→int, round half-to-even, saturating, NaN→0 |
 
 ```c
 int4 v = int4{1, 2, 3, 4};
@@ -1747,6 +1769,7 @@ Include with `#include` or `import`:
 | **File**    | `lib/file.mc`    | File read/write (whole file), file_exists                        |
 | **Memory**  | `lib/mem.mc`     | Arena allocator and pool allocator                               |
 | **Thread**  | `lib/thread.mc`  | OS threads and mutexes                                           |
+| **Thread pool** | `lib/thread_pool.mc` | Persistent worker pool: `parallel_for` and `parallel_for_chunk`; idle workers block |
 | **Atomic**  | `lib/atomic.mc`  | Atomic load/store/CAS/RMW with `MemOrder` (relaxed → seq_cst)    |
 | **Fiber**   | `lib/fiber.mc`   | Cooperative coroutines (fiber_create, fiber_switch, fiber_yield) |
 | **Linear**  | `lib/linear.mc`  | Vector/matrix/quaternion math (dot, cross, normalize, perspective, look_at, quaternions) |
@@ -2425,6 +2448,85 @@ image has one level and takes no LOD.
 `frag_coord()`, `front_facing()`, `sample_mask()`,
 `discard;` (fragment; aborts the current fragment),
 `group_barrier()`, `memory_barrier()` (compute)
+
+**Subgroup** (compute): the hardware SIMD group, 32 lanes on Apple GPUs.
+
+| Builtin | Returns | Meaning |
+|---------|---------|---------|
+| `subgroup_lane()` | `u32` | Index of this lane in the group |
+| `subgroup_size()` | `u32` | Lanes per group |
+| `subgroup_sum(x)`, `subgroup_max(x)`, `subgroup_min(x)` | type of `x` | Reduce a scalar `f32`/`i32`/`u32` across the group; every lane gets the result |
+| `subgroup_shuffle_down(x, delta)` | type of `x` | `x` from lane `lane + delta`; undefined past the last lane |
+
+Metal, GL 4.3 with `GL_KHR_shader_subgroup`, and WebGPU lower these
+directly. D3D11 (shader model 5.0) has no wave operations. A subgroup
+call there is a compile error unless it sits under `when gpu(...)` with
+a shared-memory branch for `d3d11`.
+
+**Half precision**: `unpack_f16x2(u32)` → `float2` and
+`pack_f16x2(float2)` → `u32` convert two IEEE binary16 values packed in
+one word, low half first, round to nearest even. Both work on every
+dialect.
+
+The types `f16`, `f16x2` and `f16x4` exist on Metal (`half`) and WebGPU
+(`enable f16;`) only, so they sit under `when gpu(metal) || gpu(webgpu)`.
+On D3D11 (shader model 5.0) and GL 4.3 an ungated f16 type is a compile
+error. Where the types exist, f16 supports:
+
+- locals, `@shared f16[N]`, and `[]f16` storage buffers
+- `+ - * /`
+- swizzles of length 1, 2 and 4
+- the 1-arg and 2-arg math builtins
+- the subgroup reductions
+
+Rules:
+
+- `f16` never mixes with `f32` in one expression. `cast(f16, x)` and
+  `cast(f32, h)` convert.
+- A float or int literal beside an `f16` adopts the type.
+- `@uniform` blocks take no f16.
+- Half arithmetic rounds per backend, so results are not bit-identical
+  across GPUs.
+
+**Packed 8-bit lanes**: each argument is a `u32` word holding four 8-bit
+lanes, low byte first. All four builtins are exact on every dialect.
+
+| Builtin | Returns | Meaning |
+|---------|---------|---------|
+| `dot4_i8(a, b)` | `i32` | Sum of the four signed lane products |
+| `dot4_u8(a, b)` | `u32` | Sum of the four unsigned lane products |
+| `unpack_i8x4(w)` | `float4` | The four lanes as signed floats |
+| `unpack_u8x4(w)` | `float4` | The four lanes as unsigned floats |
+
+WebGPU has an instruction for each. On Metal, D3D11 and GL the dots run
+a small per-shader helper; the unpacks are one reinterpret and convert
+on Metal and shifts elsewhere. `unpack_*` is the quantized-weight decode
+in one call instead of a shift pair per lane.
+
+**Loop unroll hint**: `@unroll` before a `for` loop asks the shader
+compiler to unroll it fully. Metal gets `_Pragma("clang loop
+unroll(full)")` and HLSL gets `[unroll]`; GLSL, WGSL and native code
+ignore it. Use it on constant-trip inner loops that index arrays of
+simdgroup tiles, which otherwise may not stay in registers.
+
+**Simdgroup matrices** (compute, Metal only, under `when gpu(metal)`):
+`simdgroup_mat8x8` (f32) and `simdgroup_mat8x8_f16` are 8×8 tiles held
+by one SIMD group. Every lane of the group must reach each call. Other
+dialects reject an ungated use by name.
+
+| Builtin | Meaning |
+|---------|---------|
+| `simdgroup_zero()`, `simdgroup_zero_f16()` | A zero tile |
+| `simdgroup_load(m, arr, offset, stride)` | Fill `m` from `arr`, starting at element `offset`, `stride` elements per row |
+| `simdgroup_load_t(m, arr, offset, stride)` | Same, loading the transpose |
+| `simdgroup_mad(d, a, b, c)` | `d = a * b + c` |
+| `simdgroup_store(m, arr, offset, stride)` | Write `m` to `arr` at element `offset`, `stride` elements per row |
+
+`arr` is a `@shared` array or a storage buffer of the tile's element
+type, or of its 2- or 4-vectors for staging with vector stores. Offsets
+and strides count scalar elements either way. In `simdgroup_mad`, `a`
+and `b` share one element type and `c` and `d` share one; f16 operands
+into an f32 accumulator is allowed.
 
 **Atomic** (compute):
 `atomic_add`, `atomic_min`, `atomic_max`, `atomic_exchange`, `atomic_cmp_exchange`
