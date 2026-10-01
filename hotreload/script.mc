@@ -10,13 +10,13 @@
 
 import game_abi;
 
-u32 script_abi_version() { return GAME_ABI_VERSION; }
+export u32 script_abi_version() { return GAME_ABI_VERSION; }
 
-void script_reloaded(ScriptCtx* c) {
+export void script_reloaded(ScriptCtx* c) {
     c.api.log("script: reloaded\n");
 }
 
-void script_update(ScriptCtx* c) {
+export void script_update(ScriptCtx* c) {
     HostApi* api = c.api;
     World w = c.world;
     Entity p = api.player(w);

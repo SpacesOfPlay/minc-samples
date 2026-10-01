@@ -53,7 +53,7 @@ int4 indices = int4{0, 1, 2, 3};
 
 A vector literal takes one value or all of its components. One value
 splats across every lane; a vector-typed value contributes all of its
-own, so literals concatenate:
+own. Literals concatenate:
 
 ```c
 float4 grey  = float4{0.5f};              // 0.5 in all four lanes
@@ -71,14 +71,15 @@ float4 bad = float4{1.0f, 2.0f};          // error: takes one value
 ```
 
 Matrices require all of their values. These rules are the same inside
-`@shader` functions, so a vector literal is identical on the CPU
+`@shader` functions. A vector literal is identical on the CPU
 and the GPU.
 
 The 256-bit wide types map to native AVX2 instructions under
-`--target windows-avx2` / `linux-avx2`. On other x64 targets they
-lower to two 128-bit halves; on ARM64 and wasm to scalar code. The
-operations on them are the `f32x8_*` / `i32x8_*` / `i8x32` SIMD
-intrinsics; these types carry no operator overloads of their own.
+`--target windows-avx2` / `linux-avx2` / `uefi-x64-avx2`. On other x64
+targets they lower to two 128-bit halves; on ARM64 and wasm to scalar
+code. The operations on them are the `f32x8_*` / `i32x8_*` / `i8x32`
+SIMD intrinsics; `f32x8` carries no operators of its own, `i8x32` has
+`& | ^ ~` and `i32x8` has `+ - & | ^ ~`.
 
 | Type     | Size     | Description           |
 |----------|----------|-----------------------|
@@ -144,9 +145,12 @@ The 2-wide 64-bit SIMD vectors. `f64x2` supports component-wise
 
 `i64x2` / `u64x2` support the operators that map to packed SIMD:
 `+ - & | ^ ~`, unary `-`, and `<< >>` by a uniform scalar count
-(`>>` is logical for `u64x2`, arithmetic for `i64x2`). `* / %` are
+(`>>` is logical for `u64x2`, arithmetic for `i64x2`). A vector shift
+count past the lane width follows the scalar rule in each lane: 0 for
+`<<` and logical `>>`, the sign for arithmetic `>>`. `* / %` are
 rejected (no 64-bit packed multiply or divide); scalarize those
-explicitly.
+explicitly. `i8x16` has the bitwise `& | ^ ~` only; `cast()` to
+`u64x2` or `int4` reaches lane arithmetic.
 
 ```c
 i64x2 v = i64x2{5000000000, -3000000000};
@@ -199,7 +203,7 @@ literals. Identifiers are restricted to ASCII
   Surrogates (`U+D800`-`U+DFFF`) and codepoints above `U+10FFFF`
   are rejected.
 - Char literals carry a Unicode codepoint in an integer-literal
-  node, so `u32 c = '🎉';` is a clean assign. Narrowing to a type
+  node. `u32 c = '🎉';` is a clean assign. Narrowing to a type
   that can't hold the codepoint is a compile error:
   `u8 c = '🎉';` rejects with `character literal value 127881
   does not fit in u8`.
@@ -312,7 +316,7 @@ s.data                          // raw u8 pointer
 String literals are type `str`. Not null-terminated by default.
 
 String literals are read-only. Identical literals share one copy, and on
-native targets the bytes live in the executable's code section, so a
+native targets the bytes live in the executable's code section. A
 store through a literal's pointer faults. Copy into a `string` or a
 buffer to modify text.
 
@@ -589,7 +593,7 @@ i32 raw = 1;
 Feature back = raw;           // OK:    same width
 ```
 
-A member is an `i32` constant literal, so it coerces wherever a literal
+A member is an `i32` constant literal. It coerces wherever a literal
 does. An enum-typed value is an `i32` value: it widens where `i32`
 widens and needs a `cast()` to narrow.
 
@@ -869,9 +873,9 @@ can still `break` / `continue` against their own loop.
 
 Leaving blocks early runs their defers. `return` evaluates its value,
 then runs every pending defer in the function. A returned scalar is
-read before the defers run, so a defer that writes the variable does not
+read before the defers run. A defer that writes the variable does not
 change the value; a returned struct, union or array is copied out after
-them, so a defer that writes one of its fields changes what the caller
+them. A defer that writes one of its fields changes what the caller
 receives. `break` and `continue` run the defers of each
 block they leave, innermost first, out to the body of the loop they
 target (a labeled one included). `break case` and `fallthrough` do the
@@ -980,7 +984,7 @@ when (NCHANNELS * 4) > MAX_STRIDE { ... }
 ```
 
 `&&` / `||` short-circuit: the dead operand is parsed but not
-evaluated, so `when defined(X) && X >= 3` is legal even when `X` is
+evaluated. `when defined(X) && X >= 3` is legal even when `X` is
 undefined. A bare config name that was never `@define`d / `-D`'d,
 outside a dead branch, is an error; use `defined(NAME)` to test
 presence. Unlike C, an undefined identifier is not implicitly zero.
@@ -998,7 +1002,7 @@ Available `arch` values: `x64`, `arm64`, `wasm32`.
 ### Compiler version
 
 ```c
-@minc_min_version "0.9.15"      // refuse to compile with anything older
+@minc_min_version "0.9.16"      // refuse to compile with anything older
 
 when MINC_VERSION >= 9011 { ... }   // gate on the running compiler
 ```
@@ -1006,7 +1010,7 @@ when MINC_VERSION >= 9011 { ... }   // gate on the running compiler
 `@minc_min_version` : the oldest compiler that can build the file.
 
 `MINC_VERSION` encoded as `major*1000000 + minor*1000 + patch`.
-0.9.15 is `9015`, 1.0.0 would be `1000000`.
+0.9.16 is `9016`, 1.0.0 would be `1000000`.
 
 ## Expressions
 
@@ -1044,17 +1048,13 @@ while --n > 0 { }    // decrement first, then compare
 u8 c = *--end;       // step back one byte, read it
 ```
 
-Pointer increments step by `sizeof(*T)`, so `p++` on an `i32*`
+Pointer increments step by `sizeof(*T)`. `p++` on an `i32*`
 advances by 4 bytes.
 
-The operand may not contain a function call in its address path.
-`func()[i]++`, `arr[func()]++`, `obj.field()[i]++` are rejected at
-type-check. Split into a separate statement:
-
-```c
-i32* t = func();
-t[i]++;
-```
+The operand's address is evaluated once. Calls in it run once:
+`next_slot()[i]++` and `counts[hash(key)]++` call each function a
+single time, as `+=` does. A field of a struct returned by value from
+a call has no address. `make_point().x++` is an error.
 
 ### Named arguments
 
@@ -1077,7 +1077,7 @@ add(3, b: 4)                  // mixed positional + named
 
 "On assignment" means places with a target type: init, return,
 argument passing, store. **In an expression there is no target width
-to convert toward, so mixed signed/unsigned still errors**:
+to convert toward. Mixed signed/unsigned still errors**:
 `i32 + u64` is rejected; cast one side.
 
 ```c
@@ -1175,7 +1175,7 @@ i32 d = cast(i32, b) >> 4;    // OK: arithmetic shift chosen explicitly
 minc applies these floating-point optimizations by default:
 
 - **FMA contraction**: `a * b + c` may fuse into one FMA instruction.
-  FMA rounds once instead of twice, so results can differ by at most
+  FMA rounds once instead of twice. Results can differ by at most
   1 ULP from the unfused form. This is the same contraction license
   as MSVC `/fp:contract` and clang's default `-ffp-contract=on`.
 
@@ -1284,7 +1284,7 @@ math.add(2, 3);
 The selective `from` clause takes either form: `from "path.mc"` is
 path-relative like a quoted import; `from name` uses the bare-import lib-search.
 The listed names are visible only in the importing file; the rest of the
-module stays hidden but fully compiled, so listed functions may call
+module stays hidden but fully compiled. Listed functions may call
 unlisted ones. A full import of the same module, from any file and in
 any order, makes all of it visible everywhere. Listing a name the module
 doesn't define, or a `private` one, is an error; so is defining a name
@@ -1312,9 +1312,9 @@ private `enum` and the constructors of a private `union`. Using a
 private type from another file is a compile error ("type 'X' is
 private to <file>").
 
-A private function is also excluded from the export table of a shared
-library (`--shared`): still emitted and callable within the module,
-but not visible to `dlsym` / `GetProcAddress`.
+A shared library (`--shared`) exports only `export`-marked functions
+(see Export). A private function is never visible to `dlsym` /
+`GetProcAddress`.
 
 A private declaration never collides with a same-name declaration in
 another file: two files may each declare a `private i32 g_state` or
@@ -1367,15 +1367,23 @@ export {
 }
 ```
 
-Exported functions are surfaced at the platform module boundary so an
-external host can call them. On **WASM**, each `export`-marked
-function appears in the module's `exports` section and is callable as
-`instance.exports.frame_tick(...)` from JavaScript. On native targets
-(PE / ELF / Mach-O) the keyword parses but is a no-op.
+Exported functions are the module's ABI: they are surfaced at the
+platform module boundary so an external host can call them, and they
+are roots for dead-code elimination. An exported function is kept
+even when nothing inside the module calls it.
 
-On WASM, a `main()` function, if present, is auto-exported (no
-`export` keyword needed). A WASM module may also omit `main` entirely
-and surface its API through `export`'d functions or a `_start()`.
+On **WASM**, each `export`-marked function appears in the module's
+`exports` section and is callable as `instance.exports.frame_tick(...)`
+from JavaScript. A `main()` function, if present, is auto-exported. A
+WASM module may also omit `main` entirely and surface its API through
+`export`'d functions or a `_start()`.
+
+On native targets, a shared library (`--shared`: PE DLL, ELF `.so`,
+Mach-O dylib) exports exactly the `export`-marked functions, resolved
+by `GetProcAddress` / `dlsym`. Everything else is internal and subject
+to dead-code elimination like in an executable. A shared library with
+no exported function is a compile error. In an executable the keyword
+only pins the function as a DCE root.
 
 ### Include
 
@@ -1510,7 +1518,7 @@ A debugger attached to the process breaks at the abort rather than
 watching it exit. Nothing is flushed and no cleanup runs: `defer`
 blocks in progress do not fire.
 
-Both are noreturn, so a function whose only exit path is `abort()`
+Both are noreturn. A function whose only exit path is `abort()`
 needs no return statement:
 
 ```c
@@ -1531,7 +1539,20 @@ i32 popcount(i32 x)             // count set bits
 i32 clz(i32 x)                  // count leading zeros
 i32 ctz(i32 x)                  // count trailing zeros
 i32 bswap(i32 x)                // byte swap
+u64 mulhi(u64 a, u64 b)         // bits 64..127 of the 128-bit product a * b
+void mac128(u64* acc, u64 a, u64 b)   // acc[0..2] += a * b, carry into acc[2]
 ```
+
+`mulhi` is the high half of the unsigned product; the low half is
+`a * b`. One instruction on x64 (`mul`) and arm64 (`umulh`), four
+32-bit products on wasm. Narrower unsigned operands are zero-extended;
+signed operands take a `cast(u64, ...)`.
+
+`mac128` adds the 128-bit product into the three words at `acc` with
+the carry chained through the third word (`mul; add; adc; adc` on x64,
+`mul; umulh; adds; adcs; adc` on arm64, compares on wasm). The third
+word takes only the carry out of the second: it is the column
+accumulator of a multi-word multiply, not a full third limb.
 
 ### Hardware hints
 
@@ -1559,6 +1580,69 @@ CPUID bit, and `cpu_random` stores one word through `out` and returns
 true, or returns false with `*out` untouched when the CPU has no source.
 On arm64 and wasm both current return false. This is intended for kernel code.
 
+### AES and carry-less multiply probes
+
+```c
+bool cpu_has_aes()         // the AES round instructions (AES-NI, FEAT_AES)
+bool cpu_has_clmul()       // the 64x64 carry-less multiply (PCLMULQDQ, FEAT_PMULL)
+bool cpu_has_vaes()        // the AES rounds on 256 bits (VAES; x64 only)
+bool cpu_has_vpclmulqdq()  // the carry-less multiply on 256 bits (VPCLMULQDQ; x64 only)
+```
+
+The two 256-bit probes read CPUID leaf 7's ECX bits 9 and 10 on x64
+and fold to false on arm64 and wasm. They say when the `i8x32` forms of
+the crypto rows run two blocks per instruction; those forms are correct
+wherever the 128-bit probe says yes, since without VAES they lower to
+the 128-bit instruction on each half.
+
+On x64 these read CPUID.01H:ECX bits 25 and 1. On macOS and iOS they
+ask `sysctlbyname` for `hw.optional.arm.FEAT_AES` / `FEAT_PMULL`; on
+Linux, Android and UEFI arm64 they read `ID_AA64ISAR0_EL1`, which the
+kernel exposes to user space. On wasm both fold to false. They gate the
+`aesenc` / `clmul` family in the SIMD intrinsics section: a call to one
+of those builtins on a part whose probe says no executes an instruction
+the part does not have.
+
+### SHA-256
+
+```c
+bool cpu_has_sha256()                                 // SHA-NI / FEAT_SHA256
+void sha256_compress(u32* state, u8* blocks, i64 n)   // n blocks of 64 bytes
+```
+
+`sha256_compress` runs the SHA-256 compression function over `n`
+consecutive 64-byte blocks and updates the eight state words in place
+(`state[0]` is `a` in FIPS 180-4's names); an `n` of zero or less
+leaves the state as it was. It is the block function a SHA-256
+implementation calls once per block; padding and the length word stay
+with the caller. It is a block-level builtin rather than one
+per instruction because x64 and arm64 split the state differently
+(ABEF/CDGH against ABCD/EFGH) and a per-instruction family would carry
+that into every program. On x64 the probe reads CPUID leaf 7's EBX bit
+29, after leaf 0 has confirmed the part has a leaf 7, and the routine
+is SHA-NI; on arm64 the probe asks `sysctlbyname`
+for `hw.optional.arm.FEAT_SHA256` (macOS, iOS) or reads
+`ID_AA64ISAR0_EL1`'s SHA2 field (Linux, Android, UEFI), and the routine
+is the `SHA256H` family. A call on a part whose probe says no executes
+instructions the part does not have. On wasm the probe is false and the
+call is a compile error; keep the portable block function in the else
+arm.
+
+### Time-stamp counter and CPUID (x64)
+
+```c
+u64  cpu_rdtsc()                                  // RDTSC: the time-stamp counter
+void cpu_cpuid(u32 leaf, u32 subleaf, u32* out)   // CPUID: out[0..3] = EAX, EBX, ECX, EDX
+```
+
+These are the x86 instructions, on Windows, Linux and UEFI x64. A call
+on arm64 or wasm is a compile error; gate it with `when arch(x64)`.
+`cpu_rdtsc` counts cycles at a rate the CPU defines and does not
+serialise. Use `qpc()` / `qpf()` for elapsed time; `cpu_rdtsc` is for
+cycle counts, and for building a clock where there is no OS, with
+`cpu_cpuid` to find the invariant-TSC bit (leaf 80000007H, EDX bit 8)
+and the frequency (leaf 15H, 16H or a hypervisor leaf).
+
 ### Math (builtins)
 
 ```c
@@ -1585,7 +1669,7 @@ packed vec types: the 128-bit `int4` / `uint4` / `f64x2` / `i64x2` /
 `f32x8` / `i32x8` / `i8x32`. Each call is one SIMD instruction, or a
 small fixed sequence; codegen is the same shape on x64 and ARM64. The
 256-bit types use native AVX2 only under `--target windows-avx2` /
-`linux-avx2` (see Wide SIMD below).
+`linux-avx2` / `uefi-x64-avx2` (see Wide SIMD below).
 
 #### Streaming load/store
 
@@ -1625,7 +1709,7 @@ in 64 bits: `int4` sign-extends to `i64`, `uint4` zero-extends to
 
 `accum4` carries a deferred 2x64 sum across a loop; `reduce4`
 collapses the carrier to a scalar once at the end. The carrier is
-a real `u64x2`/`i64x2` SIMD vreg, so the fold is one packed add
+a real `u64x2`/`i64x2` SIMD vreg. The fold is one packed add
 per iteration with no horizontal work. Reach for them whenever a
 per-iteration `sum4`/`sum4_wide` would do horizontal work that can
 wait until after the loop.
@@ -1701,7 +1785,65 @@ for i32 i = 0; i < n; i = i + 16 {
 i64 total = sum4_wide(acc);
 ```
 
-#### Wide SIMD (`windows-avx2` / `linux-avx2`)
+#### Byte lanes, AES and carry-less multiply (128-bit)
+
+`i8x16` also has the bitwise operators `& | ^ ~`, and `cast()` between
+any two 128-bit vector types (`i8x16`, `u64x2`, `i64x2`, `int4`,
+`uint4`, `float4`, `f64x2`) is a reinterpret of the same 16 bytes that
+emits no instruction. Lane 0 is the first byte in memory on every
+target; a `u64x2` has its low 64 bits in lane 0.
+
+The byte-lane rows compile on every target, x64, arm64 and wasm:
+
+| Function                                   | Returns | Notes |
+|--------------------------------------------|---------|-------|
+| `byte_shuffle(i8x16 v, i8x16 idx)`         | `i8x16` | lane i = `v[idx[i] & 15]`, or 0 when bit 7 of `idx[i]` is set; bits 4..6 are ignored (vpshufb semantics everywhere) |
+| `byte_shl(i8x16 v, n)`                     | `i8x16` | the vector moved `n` bytes toward higher lanes, zero fill |
+| `byte_shr(i8x16 v, n)`                     | `i8x16` | toward lower lanes, zero fill |
+| `byte_align(i8x16 hi, i8x16 lo, n)`        | `i8x16` | bytes `n..n+15` of the 32-byte pair `lo:hi` |
+
+`n` is a compile-time integer constant from 0 to 16 (an immediate in
+the encoding); anything else is a compile error.
+
+The crypto rows need the probe above to have said yes, and are a
+compile error on `--target wasm`. A library that builds everywhere puts
+its hardware path under `when arch(x64) || arch(arm64)` and chooses on
+the probe inside it, with the software path in the `else` arm.
+
+| Function                                   | Returns | Notes |
+|--------------------------------------------|---------|-------|
+| `aesenc(i8x16 block, i8x16 round_key)`     | `i8x16` | one middle round: SubBytes, ShiftRows, MixColumns, XOR the key |
+| `aesenclast(i8x16 block, i8x16 round_key)` | `i8x16` | the final round, no MixColumns |
+| `aesdec(i8x16 block, i8x16 round_key)`     | `i8x16` | one inverse middle round (equivalent inverse cipher: middle keys through `aesimc`) |
+| `aesdeclast(i8x16 block, i8x16 round_key)` | `i8x16` | the final inverse round |
+| `aesimc(i8x16 round_key)`                  | `i8x16` | InvMixColumns, for the decryption schedule |
+| `aeskeygenassist(i8x16 v, rcon)`           | `i8x16` | the key-expansion helper; `rcon` a constant 0..255 |
+| `clmul(u64x2 a, u64x2 b, which)`           | `u64x2` | 64x64 -> 128 carry-less product of one half of each; `which` is `0x00`, `0x01`, `0x10` or `0x11` (bit 0 picks `a`'s high half, bit 4 `b`'s) |
+
+The rounds carry the x86 meaning on arm64 too: the same source gives
+the same bytes on both. A ten-round block written as ten calls stays
+in one register from the first round to the last.
+
+```c
+i8x16 encrypt_block(i8x16 s, i8x16* rk) {   // AES-128, rk[0..10]
+    s = s ^ rk[0];
+    for i32 r = 1; r <= 9; r++ { s = aesenc(s, rk[r]); }
+    return aesenclast(s, rk[10]);
+}
+```
+
+`byte_shuffle`, the four AES rounds and `clmul` also take `i8x32`
+operands and return `i8x32`, each 128-bit lane on its own: under the
+`-avx2` targets one `VPSHUFB` / `VAESENC` / `VPCLMULQDQ` on a `ymm`
+register, two blocks per instruction where the part has VAES and
+VPCLMULQDQ (`cpu_has_vaes`, `cpu_has_vpclmulqdq`); elsewhere the
+128-bit row on each half. `clmul` on `i8x32` takes the lanes' 64-bit
+halves as bytes 0-7, 8-15, 16-23 and 24-31, with the same `which`; the
+`i8x16` to `u64x2` casts and `i8x32_pack` / `i8x32_lo` / `i8x32_hi`
+move a `u64x2` pair in and out. The bytes are the same through both
+lowerings.
+
+#### Wide SIMD (`windows-avx2` / `linux-avx2` / `uefi-x64-avx2`)
 
 *** [EXPERIMENTAL] ***
 
@@ -1709,7 +1851,11 @@ The 256-bit `f32x8` / `i32x8` / `i8x32` intrinsics. Under the
 `-avx2` targets each maps to one AVX2 instruction or a small fixed
 sequence; on other x64 targets they lower to two 128-bit ops, and to
 scalar code on ARM64 and wasm. `f32x8_fma` accumulates into its first
-argument.
+argument. An `-avx2` build checks CPUID once at the top of `main` (or
+`sokol_main`) and exits with a message on a part without AVX2; on
+`uefi-x64-avx2` the check sits in `main` and reports through the
+runtime contract's `__minc_write` and `__minc_exit`. An image that
+enters at `efi_main` alone carries no check.
 
 | Function                                   | Returns  | Notes                          |
 |--------------------------------------------|----------|--------------------------------|
@@ -1718,6 +1864,12 @@ argument.
 | `i32x8_load(i32*)`                         | `i32x8`  | 8×i32 load                     |
 | `i32x8_store(i32*, i32x8)`                 | `void`   | matching store                 |
 | `i8x32_load(i8*)`                          | `i8x32`  | 32×i8 load                     |
+| `i8x32_store(i8*, i8x32)`                  | `void`   | matching store                 |
+| `i8x32_pack(i8x16 lo, i8x16 hi)`           | `i8x32`  | lo in bytes 0-15, hi in 16-31  |
+| `i8x32_lo(i8x32)` / `i8x32_hi(i8x32)`      | `i8x16`  | bytes 0-15 / 16-31             |
+| `byte_shuffle(i8x32 v, i8x32 idx)`         | `i8x32`  | within each 128-bit lane       |
+| `aesenc(i8x32, i8x32)` and the other rounds, `clmul(i8x32, i8x32, which)` | `i8x32` | see the crypto rows above |
+| `i8x32 & | ^ ~`, `i32x8 + - & | ^ ~`       |          | one `ymm` op; `cast()` between `i8x32` and `i32x8` is free |
 | `f32x8_add/sub/mul(f32x8, f32x8)`          | `f32x8`  | component-wise                 |
 | `f32x8_min/max(f32x8, f32x8)`              | `f32x8`  | per-lane min / max             |
 | `f32x8_div(f32x8, f32x8)`                  | `f32x8`  | per-lane divide                |
@@ -1776,8 +1928,8 @@ Include with `#include` or `import`:
 | **Inflate** | `lib/inflate.mc` | DEFLATE decompressor (RFC 1951)                                  |
 | **Deflate** | `lib/deflate.mc` | DEFLATE compressor (RFC 1951; fixed-Huffman + LZ77)              |
 | **Zlib**    | `lib/zlib.mc`    | zlib + gzip wrappers around inflate/deflate (CRC32, Adler-32)    |
-| **PNG**     | `lib/png.mc`     | PNG image decoder (grayscale, RGB, RGBA → RGBA8)                 |
-| **JPEG**    | `lib/jpeg.mc`    | JPEG decoder (baseline + progressive, 444/422/420, restarts) + encoder (4:2:0, quality 1-100, optimized Huffman) |
+| **PNG**     | `lib/png.mc`     | PNG decoder (every color type and bit depth, Adam7, tRNS → RGBA8) + encoder (RGBA8) |
+| **JPEG**    | `lib/jpeg.mc`    | JPEG decoder (baseline, extended, progressive; YCbCr, gray, Adobe RGB/CMYK/YCCK; EXIF orientation) + encoder (4:2:0, quality 1-100, Annex K tables) |
 | **Sokol**   | `lib/sokol_all.mc` | Cross-platform windowing + GPU (sokol_app / sokol_gfx)           |
 | **Obj-C**   | `lib/objc_runtime.mc` | Objective-C runtime bindings for Cocoa/UIKit/Metal (*macOS / iOS only*) |
 
@@ -1885,8 +2037,8 @@ file_write_str("output.txt", "hello");
 i64 n = file_size("input.txt");   // bytes, -1 if unknown
 ```
 
-`FileData.len` is an `i64`, so `file_read` handles files of any size.
-A `string` carries an `i32` length, so `file_read_str` returns empty
+`FileData.len` is an `i64`. `file_read` handles files of any size.
+A `string` carries an `i32` length. `file_read_str` returns empty
 for a file past 2 GB rather than a truncated string.
 
 ### Memory allocators
@@ -1933,7 +2085,7 @@ i32 main() {
 ### Fibers
 
 ```c
-#include "lib/fiber.mc"
+import fiber;
 
 void my_fiber(void* arg) {
     print("step 1\n");
@@ -1944,15 +2096,19 @@ void my_fiber(void* arg) {
 }
 
 i32 main() {
-    fiber_init();
     Fiber* f = fiber_create(my_fiber, null);
     fiber_switch(f);    // "step 1"
     fiber_switch(f);    // "step 2"
     fiber_switch(f);    // "step 3"
-    fiber_free(f);
+    if fiber_done(f) { print("done\n"); }
+    fiber_destroy(f);
     return 0;
 }
 ```
+
+`fiber_switch` resumes a fiber until it yields or returns, and does
+nothing once it is done. `fiber_done` is true after the entry function
+has returned. `fiber_destroy` frees the fiber's stack.
 
 ## C interop
 
@@ -2039,7 +2195,7 @@ extern "libc.so.6" void libc_free(void* ptr) from "free";
 extern "libstdc++.so.6" void cpp_delete(void* p) from "_ZdlPv";
 ```
 
-The operand is a string, so it covers symbols that aren't valid
+The operand is a string. It covers symbols that aren't valid
 minc identifiers (mangled C++ names, decorated names).
 
 This also exists to import foreign symbols that collide with a 
@@ -2062,7 +2218,7 @@ variable, an enum value, a union variant, or a data extern
 (`extern "dll" T name;`) named after a built-in is a compile error.
 The rule holds regardless of visibility — `private` declarations are
 rejected the same way, in any file of the program. Data externs take
-the same `from` rename as function externs, so a foreign data symbol
+the same `from` rename as function externs. A foreign data symbol
 with a reserved name is imported under a distinct minc name.
 
 ### Linked object imports
@@ -2111,7 +2267,7 @@ minc function on every native target:
   register; larger structs pass by pointer.
 
 Sender and receiver use that convention for direct, indirect, and
-cross-image calls alike, so this example needs nothing declared on it:
+cross-image calls alike. This example needs nothing declared on it:
 
 ```c
 void my_method_impl(NSRect rect, u64 flags) {
@@ -2122,11 +2278,11 @@ void my_method_impl(NSRect rect, u64 flags) {
 It is the convention rather than an opt-in because a function pointer
 that reaches minc across an image boundary, through a symbol lookup or a
 vtable built at run time, involves no source-level `&fn` for a compiler to
-notice. Both sides have to agree without being told, so both key on the
+notice. Both sides have to agree without being told. Both key on the
 target rather than on a marking.
 
 Vector builtins need a little care: `float4`, `int4`, `f32x8` and friends
-are internal SIMD types with no portable C calling convention, so an
+are internal SIMD types with no portable C calling convention. An
 `extern` declaration carrying one is rejected rather than silently
 miscompiled. Pass a matching struct instead, or assert the signature
 yourself with a fn-pointer cast, which is how the jit tests hand `float4`
@@ -2212,7 +2368,7 @@ descriptors.
 
 An array field carries its element type in `type_kind` and its length in
 `array_count`, which is 1 for every other field. std140 pads array elements to
-16 bytes, so an array field must be `float4`, `int4`, `uint4`, or `float4x4`.
+16 bytes. An array field must be `float4`, `int4`, `uint4`, or `float4x4`.
 Limitation: nested structs in `@uniform` structs are rejected; flatten to
 scalar, vector, matrix, or array fields.
 
@@ -2245,7 +2401,7 @@ array to build their backend-specific descriptors. `import shader;` exposes
 
 ### Backend-specific shader features
 
-`@point_size` has no D3D11 or WebGPU equivalent, so writing it
+`@point_size` has no D3D11 or WebGPU equivalent. Writing it
 unguarded is a compile error on those backends rather than a silent
 no-op. `when gpu(...)` names the shader backend so one source can opt
 in explicitly:
@@ -2305,7 +2461,7 @@ two disagree on vector alignment:
 minc packs vectors to 4 since its SIMD memory operations are
 unaligned; the shader languages mandate the wider alignments.
 
-`@gpu_layout` applies the GPU rules on the CPU side, so a single memcpy
+`@gpu_layout` applies the GPU rules on the CPU side. A single memcpy
 into a buffer is correct:
 
 ```minc
@@ -2332,7 +2488,7 @@ Bare `@uniform` params sharing an explicit slot follow the same offset
 rule. Since a parameter list can't be annotated, a divergent bare
 block is a compile error.
 
-An array member strides by its element alignment, so `float3[2]`
+An array member strides by its element alignment. `float3[2]`
 occupies 32 bytes and the field after it starts at 32. A pointer into
 such an array steps by the padded stride. Use `var p = &arr[0];` to keep
 that stride, or index the array directly. A bare `float3*` means a
@@ -2365,7 +2521,7 @@ float4 resolve(VOut inp, @texture(0) Texture2DMS tex) {
 ```
 
 `sample_mask()` returns the rasterizer's coverage mask for the current
-fragment, one bit per sample, so a custom resolve can treat partly
+fragment, one bit per sample. A custom resolve can treat partly
 covered pixels differently. It is a fragment builtin.
 
 Reads of a multisample texture go through `load_sample`;
@@ -2377,8 +2533,8 @@ Reads of a multisample texture go through `load_sample`;
 runtime adapter describes the bound image.
 
 GLSL exposes multisample samplers from ES 3.1 and the coverage mask
-from ES 3.2, so a shader using either declares that version. WebGL2 is
-ES 3.0 and has neither, so `--target wasm` reports a shader that uses
+from ES 3.2. A shader using either declares that version. WebGL2 is
+ES 3.0 and has neither. `--target wasm` reports a shader that uses
 them as a compile error. WebGPU has multisample textures and takes the
 same shader unchanged; select it with `@gpu "webgpu"`.
 
@@ -2469,7 +2625,7 @@ one word, low half first, round to nearest even. Both work on every
 dialect.
 
 The types `f16`, `f16x2` and `f16x4` exist on Metal (`half`) and WebGPU
-(`enable f16;`) only, so they sit under `when gpu(metal) || gpu(webgpu)`.
+(`enable f16;`) only. They sit under `when gpu(metal) || gpu(webgpu)`.
 On D3D11 (shader model 5.0) and GL 4.3 an ungated f16 type is a compile
 error. Where the types exist, f16 supports:
 
@@ -2485,7 +2641,7 @@ Rules:
   `cast(f32, h)` convert.
 - A float or int literal beside an `f16` adopts the type.
 - `@uniform` blocks take no f16.
-- Half arithmetic rounds per backend, so results are not bit-identical
+- Half arithmetic rounds per backend. Results are not bit-identical
   across GPUs.
 
 **Packed 8-bit lanes**: each argument is a `u32` word holding four 8-bit
@@ -2556,7 +2712,7 @@ The shader backend is selected automatically from `--target`:
 
 Emitted versions rise where a feature needs it: GLSL 420 for storage images and
 430 for compute, GLSL ES 310 for `gather` or storage images. WebGL2 is GLSL ES
-300 only, so it cannot run the shaders that ask for 310.
+300 only. It cannot run the shaders that ask for 310.
 
 Override with `@gpu "target"` at file scope (before shader functions):
 `@gpu "opengl"`, `@gpu "d3d11"`, `@gpu "metal"`, `@gpu "opengles"`,
@@ -2624,7 +2780,7 @@ void check(bool ok, str file, i32 line) {
 check(x > 0, __file__, __line__);
 ```
 
-The fold happens at parse time, so they are usable anywhere the
+The fold happens at parse time. They are usable anywhere the
 equivalent written literal is: function bodies, global initializers,
 shader code (`__line__`; `__file__` fails where any string does).
 Each token reports its own position: in an included file, they name
@@ -2643,7 +2799,7 @@ minc [build|run] [debug] <input.mc> [options]
 -Os                     optimize for size (skip code-expanding passes)
 --target <t>            Cross-compile (see target table below)
 --link <file>           Link external object file (also available as @link tag)
---shared                Emit shared library (.so) instead of executable
+--shared                Emit shared library (.dll / .so / .dylib) exporting the `export` functions
 --gui                   Set PE subsystem to GUI (also available as @gui tag)
 --def <file.def>        Load additional .def file for DLL mapping (Windows)
 --unchecked             Disable bounds checking
@@ -2910,6 +3066,7 @@ the compiler.
 minc query def <name>        definitions; Struct.field names a field
 minc query refs <name>       reference sites, each with the declaration holding it
 minc query callers <name>    functions whose bodies reference it, with site counts
+minc query callees <name>    functions its body references, with site counts
 minc query symbols <text>    definitions whose name contains the text
 minc query defines <name>    the files that define it
 minc query closure <file>    every file a compile of the file reads
@@ -2934,6 +3091,7 @@ $ minc query def helper --agent=json
 | definition (`def`, `symbols`) | `util.mc:2:5 function helper`, then `private` or `forward` when so | `kind` def, `file`, `line`, `col`, `symbol`, `node`, `private`, `forward` |
 | reference (`refs`) | `main.mc:2:27 ref helper other` | `kind` ref, `file`, `line`, `col`, `symbol`, `in` |
 | caller (`callers`) | `main.mc:3:5 caller main 2` | `kind` caller, `file`, `line`, `col`, `symbol`, `caller`, `sites` |
+| callee (`callees`) | `util.mc:2:5 callee helper 2` | `kind` callee, `file`, `line`, `col`, `symbol`, `callee`, `sites` |
 | file (`defines`, `closure`) | `util.mc` | `kind` file, `file` |
 | nothing found, on stderr | `no references to lonely (defined at util.mc:3:5)`, `no symbol named missing` | `kind` empty, `query`, `symbol`, `known`, and the definition's `file`, `line`, `col` when known |
 | a file the index could not parse, on stderr | `note: broken.mc:2:24: not indexed (expected expression), mentions helper` | `kind` note, `file`, `line`, `col`, `error`, `mentions` |
@@ -2941,8 +3099,9 @@ $ minc query def helper --agent=json
 A name defined more than once: each site binds to the definition in
 its own file, else to a public one in a program the file belongs to,
 and `refs` and `callers` records name it as `of file:line` (JSON
-`of`). `file:name` in place of the name asks about that definition
-alone:
+`of`); a `callees` record names the definition whose body holds the
+sites the same way. `file:name` in place of the name asks about that
+definition alone:
 
 ```
 $ minc query callers src/vm.mc:def_method
@@ -2954,7 +3113,7 @@ command line. The index holds top-level declarations (functions,
 externs, structs, unions, enums and their members, globals, type
 aliases, struct fields), not locals; the modules the tree imports from
 outside it, the standard library included; and one platform's `when`
-arms, so `closure`, `refs` and `callers` answer for that platform while
+arms. `closure`, `refs`, `callers` and `callees` answer for that platform while
 `def` and `symbols` list every file's declarations. A file with a
 syntax error holds no entries, and the `note` names it when its text
 mentions the name asked about.
@@ -2979,7 +3138,7 @@ changed. A root change drops the index and scans the new one.
 
 | tool | arguments | result |
 |---|---|---|
-| `query` | `what` (def, refs, callers, symbols, defines, closure), `name`, `target` (as `--target`; a change rebuilds the index) | the `minc query` records, one per line |
+| `query` | `what` (def, refs, callers, callees, symbols, defines, closure), `name`, `target` (as `--target`; a change rebuilds the index) | the `minc query` records, one per line |
 | `compile` | `file`, `output`, `flags`, `hash` | the diagnostic records, with codes and fixes, then the summary or output record; `hash` adds the `hash` record |
 | `run` | `file`, `args`, `timeout`, `memory`, `flags` | the program's output, then the `run` record |
 | `debug` | `file`, `args` | `minc debug --batch`: the `crash` record with the backtrace, then the `run` record |
@@ -3134,6 +3293,8 @@ target:
 | `i64` / `u64` | 0–63 | normal shift | normal shift | normal shift |
 | `i64` / `u64` | ≥ 64 | 0 | 0 | 0 or -1 by sign |
 
+A negative shift amount counts as past the width.
+
 ```c
 i32 v = 1;
 i32 a = v << 32;            // 0
@@ -3258,7 +3419,7 @@ i32 b = cast(i32, -1.7);            // -1
 Saturation is to the underlying conversion width: `i32` for any
 i32-or-narrower target, `i64` for `i64`. Narrower destinations
 (`i8`, `i16`, `u8`, `u16`, `u32`) take the low bits of the
-saturated value, so a huge float becomes `INT32_MAX` first and
+saturated value. A huge float becomes `INT32_MAX` first and
 then truncates. If you want i16/i8-range saturation, clamp the
 float yourself before the cast.
 
@@ -3271,7 +3432,7 @@ i16 c = cast(i16, 100000.0);        // -31072 (low 16 bits of 100000)
 ### Int → float
 
 `i32` → `f64` and `u32` → `f64` are implicit. The 53-bit mantissa
-holds every 32-bit integer exactly, so no cast is needed. Integer
+holds every 32-bit integer exactly. No cast is needed. Integer
 literals within i32 range coerce directly.
 
 ```c
