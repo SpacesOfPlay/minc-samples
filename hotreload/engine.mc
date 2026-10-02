@@ -310,9 +310,9 @@ str SCRIPT_PRIV =
 
 str SCRIPT_V1 =
     "import game_abi;\n"
-    "u32 script_abi_version() { return GAME_ABI_VERSION; }\n"
-    "void script_reloaded(ScriptCtx* c) { c.api.log(\"script: v1 loaded\\n\"); }\n"
-    "void script_update(ScriptCtx* c) {\n"
+    "export u32 script_abi_version() { return GAME_ABI_VERSION; }\n"
+    "export void script_reloaded(ScriptCtx* c) { c.api.log(\"script: v1 loaded\\n\"); }\n"
+    "export void script_update(ScriptCtx* c) {\n"
     "    Priv* pv = priv(c);\n"
     "    pv.ticks++;\n"
     "    HostApi* api = c.api; World w = c.world; Entity p = api.player(w);\n"
@@ -325,9 +325,9 @@ str SCRIPT_V1 =
 
 str SCRIPT_V2 =
     "import game_abi;\n"
-    "u32 script_abi_version() { return GAME_ABI_VERSION; }\n"
-    "void script_reloaded(ScriptCtx* c) { c.api.log(\"script: v2 loaded\\n\"); }\n"
-    "void script_update(ScriptCtx* c) {\n"
+    "export u32 script_abi_version() { return GAME_ABI_VERSION; }\n"
+    "export void script_reloaded(ScriptCtx* c) { c.api.log(\"script: v2 loaded\\n\"); }\n"
+    "export void script_update(ScriptCtx* c) {\n"
     "    Priv* pv = priv(c);\n"
     "    pv.ticks++;\n"
     "    HostApi* api = c.api; World w = c.world; Entity p = api.player(w);\n"

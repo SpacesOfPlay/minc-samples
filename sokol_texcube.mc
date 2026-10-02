@@ -97,7 +97,11 @@ void init() {
     }
     PngImage tex = png_decode(fd.data, fd.len);
     free(fd.data);
-    print("texture loaded: {}x{}\n", tex.width, tex.height);
+    if tex.pixels == null {
+        eprint("texture: {}\n", tex.error);
+    } else {
+        print("texture loaded: {}x{}\n", tex.width, tex.height);
+    }
 
     sg_image img = sg_make_image(&sg_image_desc{
         .width = tex.width, .height = tex.height,

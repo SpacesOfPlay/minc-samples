@@ -16,3 +16,4 @@ build/
 
 hotreload_live.mc
 hotreload_engine.wasm
+.edminc/
