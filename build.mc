@@ -23,7 +23,7 @@
 // The minc compiler is taken from MINC, then PATH, then this folder.
 // Install minc from https://minc.dev.
 
-@minc_min_version "0.9.16"
+@minc_min_version "0.9.17"
 
 // Older minc ignores the tag above; this forces a clear error there.
 when !defined(MINC_VERSION) || MINC_VERSION < 9016 {

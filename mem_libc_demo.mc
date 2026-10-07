@@ -35,8 +35,7 @@ i32 main() {
     print("list sum {}\n", sum);
 
     // Strings and format allocate through the same heap.
-    string s = format("{} nodes, {} bytes in buf", 5, 4000);
-    defer free(s);
+    using string s = format("{} nodes, {} bytes in buf", 5, 4000);
     print("{}\n", s);
 
     when os(linux) && arch(x64) {

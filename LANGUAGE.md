@@ -217,6 +217,7 @@ i32* p = &x;                    // pointer to i32
 *p = 42;                        // dereference
 p.field                         // auto-dereference (no -> needed)
 p + n                           // pointer arithmetic (advances by n * sizeof(*p))
+q - p                           // element distance, an i64; both point at the same element type
 *p++ = expr;                    // write to *p, then p++ (postfix yields old)
 *p-- = expr;                    // write to *p, then p-- (postfix yields old)
 ```
@@ -243,6 +244,8 @@ s[i]                            // indexed access
 s[1..4]                         // subslice [start, end)
 ```
 
+A fixed array has `.len` as well: `i32[4] a; a.len` is the constant 4.
+
 An array, slice or pointer can be written through a slice target. This
 writes the elements given, starting at the offset, and leaves
 everything else alone:
@@ -255,7 +258,10 @@ a[1..4] = {7, 8, 9};            // a[1], a[2], a[3]; the rest untouched
 
 An open range takes its length from the initializer. A range with
 both bounds must be filled exactly. Non-literal bounds are left to
-the runtime bounds check.
+the runtime bounds check. The elements may be of any type, structs,
+unions and vectors included (`ps[0..2] = { P{1, 2}, {3, 4} }`). The
+right-hand side is always a brace list; copy from another array with a
+loop.
 
 That is different from whole-array assignment, which replaces the array
 and zeroes anything the initializer did not cover:
@@ -342,7 +348,10 @@ string s = string("hello");
 **Ownership rules:**
 - `string` locals must be freed or moved before scope exit
 - `free(s)` — frees the string's data
-- `defer free(s)` — idiomatic cleanup (freed at scope exit, usable until then)
+- `defer free(s)` — idiomatic cleanup (freed at scope exit, usable until then).
+  A string with a pending `defer free` cannot be moved or returned.
+- `using string s = ...;` — freed at scope exit unless moved out with
+  `move(s)` (see [Using](#using))
 - `move(s)` — transfers ownership, invalidates source
 - `return s` — implicit move (transfers to caller)
 - `string → str` — implicit conversion (safe borrow for function calls)
@@ -416,7 +425,8 @@ string line = format("{} + {} = {}", a, b, a+b); // multiple
 defer free(msg);
 defer free(line);
 
-// format() supports any printable type: integers, floats, bools, str, string, pointers.
+// format() supports any printable type: integers of every width, enums, floats, bools,
+// str, string, pointers. A struct, union or array argument is an error.
 // Use {} as placeholder — arguments are matched left-to-right.
 // The same {} syntax works with print() and eprint() (which write to stdout/stderr):
 print("x = {}\n", x);        // prints to stdout
@@ -451,7 +461,15 @@ var y = 42;                     // type inference, integer literals default to i
                                 // range (18446744073709551615, 0x8000000000000000)
 const i32 MAX = 100;            // compile-time constant
 i32 g_count = 0;                // global variable
+threadlocal i64 t_count = 0;    // one copy per thread
 ```
+
+A name is declared once per scope; a nested block may shadow it.
+
+`threadlocal` gives a file-scope variable one copy per thread,
+initialised from its constant initialiser; `&x` is this thread's copy.
+On the uefi targets the runtime provides the blocks
+(`doc/DESIGN_runtime_contract.md`).
 
 ### Functions
 
@@ -487,6 +505,19 @@ f32 dot(float4 a, float4 b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b
 float3 v = float3{1.0f, 0.0f, 0.0f};
 f32 d = dot(v, v);           // calls float3 overload
 ```
+
+An overloaded function used as a value takes the overload its
+function-pointer type names, in a declaration, an assignment or an
+argument: `fn(float3, float3): f32 f = dot;`. Without a matching
+function-pointer type it is a compile error.
+
+A generic function may share the name of an overload set, as when two
+imported modules each declare `show`. The overloads are tried first;
+when none matches, the call instantiates the template.
+
+An enum member argument is its enum where a candidate expects that
+enum at its position: with `f(i32)` and `f(Mode)`, `f(Fast)` calls
+`f(Mode)`.
 
 ### Structs
 
@@ -555,7 +586,9 @@ enum Flags { A = 1, B = 2, C = 4 }    // explicit values
 // Values are integer constant expressions: literals (incl. negatives
 // and char literals), parens, unary `! ~ -`, and the full C integer
 // operator set (`+ - * / % << >> & | ^ == != < <= > >= && ||`).
-// Earlier members of the same enum are in scope.
+// Earlier members of the same enum are in scope. Two enums are
+// distinct types: a member of one is not a value of the other, and
+// cast() converts through the integer.
 enum Errno {
     OK = 0,
     EBADF = -9,
@@ -593,9 +626,15 @@ i32 raw = 1;
 Feature back = raw;           // OK:    same width
 ```
 
+An enum member and a union variant may share a name; the name is the
+one its context expects (an enum declaration, case label or comparison
+operand takes the member, a union context the variant).
+
 A member is an `i32` constant literal. It coerces wherever a literal
-does. An enum-typed value is an `i32` value: it widens where `i32`
-widens and needs a `cast()` to narrow.
+does, and where its own enum is expected it is that enum: `Box<E> b =
+wrap(B);` infers `T = E`, while `wrap(B)` on its own is a `Box<i32>`.
+An enum-typed value is an `i32` value: it widens where `i32` widens
+and needs a `cast()` to narrow.
 
 ### Tagged unions
 
@@ -627,6 +666,20 @@ Result<i32, i32> r = Ok(100);
 Token t = Number(123);
 Token t2 = Plus;
 ```
+
+A generic union's variant takes its type from where it lands: a
+declaration, an assignment, a `return`, a call argument, or the payload
+of an outer variant (`Option<Option<i32>> n = Some(Some(1));`). Each
+payload must match its field type; a bare brace payload takes the
+field's type (`Some({ 1, 2 })` for a struct payload).
+
+A generic struct's literal names its type arguments: `Box<i32>{ 4 }`,
+`Pair2<i32, f64>{ .a = 1, .b = 2.5 }`. A bare brace takes the declared
+type, at file scope as in a function: `Pair g = { 1, 2 };`.
+
+A union may be initialized at file scope like a struct, with constant
+payloads: `Option<i32> g = Some(3);`, `Token t = Plus;`, `Shape[2] s =
+{ Rect(2, 3), Dot };`, `threadlocal Option<i32> tl = Some(1);`.
 
 Switch with pattern matching (every variant must be covered):
 
@@ -825,6 +878,7 @@ while condition { ... }
 for i32 i = 0; i < 10; i++ { ... }
 for ; i < 10; i++ { ... }               // no init (use existing variable)
 for i32 i in 0..10 { ... }              // range-based (0 to 9 inclusive)
+for i32 x in items { ... }              // each element of a slice or fixed array (a copy)
 
 switch value {
     case 1, 2, 3: { ... }               // multi-value case
@@ -840,10 +894,15 @@ continue;
 return expr;
 ```
 
+A range loop counts an integer of the declared type. A narrow counter
+(`u8`, `i16`, ...) steps at its own width, and a literal end past its
+range is an error, since the counter could never reach it.
+
 No implicit fall-through; opt in per case with `fallthrough;`. Any
 statement after `break` / `break case` / `continue` / `return` /
 `fallthrough` at the same block level is a compile error
-(unreachable statement). Braces required on every case body.
+(unreachable statement). Braces required on every case body. Two
+cases naming the same value are an error.
 
 ### Defer
 
@@ -872,10 +931,9 @@ they would skip later defers. Loops nested inside the deferred body
 can still `break` / `continue` against their own loop.
 
 Leaving blocks early runs their defers. `return` evaluates its value,
-then runs every pending defer in the function. A returned scalar is
-read before the defers run. A defer that writes the variable does not
-change the value; a returned struct, union or array is copied out after
-them. A defer that writes one of its fields changes what the caller
+then runs every pending defer in the function. The value is read
+before the defers run, whatever its type: a defer that writes the
+returned variable, or a field of it, does not change what the caller
 receives. `break` and `continue` run the defers of each
 block they leave, innermost first, out to the body of the loop they
 target (a labeled one included). `break case` and `fallthrough` do the
@@ -885,6 +943,38 @@ same out to the case body.
 statement form. `defer { free(a); free(b); }` does not mark `a` or
 `b` as defer-freed. Use one `defer free(x);` per resource for the
 tracking.
+
+### Using
+
+```c
+using string path = path_join(dir, name);
+using var buf = alloc<u8>(n);
+```
+
+`using T x = e;` declares `x` and frees it with `free` at the exit of
+the enclosing block, in the same LIFO order as a `defer free(x);` on
+the next line. The type is `string` or a pointer, and the initializer
+is required. Other cleanups use `defer`.
+
+The value leaves only through `move()`:
+
+```c
+string load(str path) {
+    using string s = file_read_str(path);
+    if s.len == 0 { return string("empty"); }   // s is freed
+    return move(s);                             // s moves to the caller
+}
+
+using Node* n = new(Node);
+if keep { g_cache = move(n); }   // n is zeroed; the exit frees null
+```
+
+`move(x)` returns the value and zeroes `x`, so the free at block exit
+does nothing; reading `x` after the move is an error. `move()` accepts
+any `using` variable, pointers included.
+
+`return x`, `free(x)`, `defer free(x)`, assignment and `++` / `--` on a
+`using` variable are errors. `using` takes a single declaration.
 
 ### `@strict_float`
 
@@ -1002,7 +1092,7 @@ Available `arch` values: `x64`, `arm64`, `wasm32`.
 ### Compiler version
 
 ```c
-@minc_min_version "0.9.16"      // refuse to compile with anything older
+@minc_min_version "0.9.17"      // refuse to compile with anything older
 
 when MINC_VERSION >= 9011 { ... }   // gate on the running compiler
 ```
@@ -1010,7 +1100,7 @@ when MINC_VERSION >= 9011 { ... }   // gate on the running compiler
 `@minc_min_version` : the oldest compiler that can build the file.
 
 `MINC_VERSION` encoded as `major*1000000 + minor*1000 + patch`.
-0.9.16 is `9016`, 1.0.0 would be `1000000`.
+0.9.17 is `9017`, 1.0.0 would be `1000000`.
 
 ## Expressions
 
@@ -1031,6 +1121,14 @@ when MINC_VERSION >= 9011 { ... }   // gate on the running compiler
 | Deref      | `*expr`                                                        |
 | Member     | `expr.field`                                                   |
 | Index      | `expr[index]`                                                  |
+
+### Evaluation order
+
+Operands, call arguments, struct literal fields and array initializer
+elements are evaluated left to right. An assignment evaluates its
+target first, then the value: `a[next()] = next()` indexes with the
+first call, and `a[j] = j++` stores into the old `a[j]`. `&&` and `||`
+stop at the first operand that decides the result.
 
 ### Increment / decrement
 
@@ -1102,6 +1200,8 @@ Binops on two same-signedness narrow operands (`u8`/`u16` or
 |---|---|
 | `+  -  *  /  %  <<  >>` | `i32` / `u32` (the result can exceed the operand width) |
 | `&  \|  ^` | operand width (`u8 ^ u8` is `u8`) |
+| unary `~` | operand width (`~a` is a `u8` for `u8 a`; 254 when `a` is 1) |
+| unary `-` | `i32` / `u32`, like the arithmetic binops (`-i16` is `i32`) |
 | compound assignment (`+=`, `<<=`, …) | lvalue width; no cast needed, the store wraps |
 
 Byte-assembly works without per-byte casts:
@@ -1204,6 +1304,8 @@ swap(&a, &b);              // infers T from pointer type
 
 // Explicit type argument (turbofish syntax)
 identity<i64>(42);         // forces T = i64
+identity<i64>(1 << 33);    // the argument is typed by the i64 parameter
+fn(i64): i64 f = identity<i64>;   // the instantiation as a value
 
 // Bidirectional inference from return type
 Pair<i32> p = make_default_pair(10);  // infers T = i32 from expected type
@@ -1249,6 +1351,9 @@ struct NumBox<T: Numeric> { T val; }
 | `Unsigned` | `u8, u16, u32, u64`                      |
 | `Float`    | `f32, f64`                               |
 
+For the narrow integer types the arithmetic promotes to 32 bits like
+everywhere else, so a body that returns `T` writes `cast(T, a + b)`.
+
 Calling a constrained function with the wrong type is a compile error:
 ```c
 add<str>("a", "b");  // error: str does not satisfy Numeric
@@ -1272,7 +1377,21 @@ import math = "lib/math_helper.mc";
 math.add(2, 3);
 ```
 
-**Quoted** `import "file.mc";` resolves relative to the importing file.
+A qualified import binds the module's public functions, overload
+sets, generic functions, globals, consts, types and enum members under
+the prefix (`math.add(2, 3)`, `math.max<i64>(a, b)`, `math.counter +=
+1`, `geo.Point p = geo.Point{ 1, 2 }`, `geo.Box<i32> b`, `geo.Fast`,
+`case geo.Line(n):`).
+The prefix is the
+only way to reach them: in every other file the plain name is the
+importer's own declaration, or undefined. Two modules imported this
+way may declare the same name, and either may share a name with the
+importing file; each module's types are its own namespace. Inside the
+module its names stay plain. A module loaded flat anywhere keeps plain
+names everywhere. One alias names one module per file.
+
+**Quoted** `import "file.mc";` resolves relative to the importing file;
+an absolute path is used as written.
 **Bare** `import helpers;` searches in order (first hit wins):
 
 | # | Location | |
@@ -1352,7 +1471,9 @@ and across files. Allowed:
   in transpiled headers. The alias resolves the name; the enum
   carries the value constants.
 - Forward declarations. `struct X;` is compatible with any later
-  definition.
+  definition. Until it is defined only pointers to `X` can be used; a
+  value, `sizeof(X)` or `new(X)` of a struct that is never defined is
+  an error.
 
 ### Export
 
@@ -1385,6 +1506,9 @@ to dead-code elimination like in an executable. A shared library with
 no exported function is a compile error. In an executable the keyword
 only pins the function as a DCE root.
 
+Only functions are exported. `export` on a global is a compile error:
+a library shares state through exported accessor functions.
+
 ### Include
 
 ```c
@@ -1393,7 +1517,8 @@ only pins the function as a DCE root.
 
 `#include` makes the included file's declarations visible (C-style
 usage). `private` declarations stay scoped to their declaring file;
-inclusion does not lift privacy.
+inclusion does not lift privacy. The path resolves relative to the
+including file; an absolute path is used as written.
 
 #### API Version Tag
 
@@ -1535,18 +1660,30 @@ writing `bounds check failed` to stderr.
 ### Bit manipulation
 
 ```c
-i32 popcount(i32 x)             // count set bits
-i32 clz(i32 x)                  // count leading zeros
-i32 ctz(i32 x)                  // count trailing zeros
-i32 bswap(i32 x)                // byte swap
+i32 popcount(x)                 // set bits, at the operand's width
+i32 clz(x)                      // leading zeros, at the operand's width
+i32 ctz(x)                      // trailing zeros, at the operand's width
+T   bswap(T x)                  // byte swap of a 16-, 32- or 64-bit integer
 u64 mulhi(u64 a, u64 b)         // bits 64..127 of the 128-bit product a * b
+i64 mulhi(i64 a, i64 b)         // the same for the signed product
 void mac128(u64* acc, u64 a, u64 b)   // acc[0..2] += a * b, carry into acc[2]
 ```
 
-`mulhi` is the high half of the unsigned product; the low half is
-`a * b`. One instruction on x64 (`mul`) and arm64 (`umulh`), four
-32-bit products on wasm. Narrower unsigned operands are zero-extended;
-signed operands take a `cast(u64, ...)`.
+`x` is an integer of any width and the count is taken at that width:
+`clz(cast(u8, 1))` is 7, and `clz(0)` and `ctz(0)` are the width. A
+literal is i32, or i64 when it needs 64 bits. `bswap` keeps the
+operand's type; a one-byte value has no byte order and is rejected.
+One instruction for the 32- and 64-bit forms on x64 and arm64; the
+narrow forms mask and use the 32-bit instruction.
+
+`mulhi` is the high half of the 128-bit product; the low half is
+`a * b`. Two unsigned operands give the unsigned high half as `u64`,
+two signed operands the signed one as `i64` (`mulhi(-1, 2)` is -1,
+not `2^64 - 1`); mixing the two is an error, and a literal follows the
+other operand. Narrower operands extend to 64 bits with their own
+signedness. One instruction on x64 (`mul` / `imul`) and arm64 (`umulh`
+/ `smulh`), 32-bit products on wasm. `mac128` is unsigned; a signed
+argument is reinterpreted as the same-width assignment rule says.
 
 `mac128` adds the 128-bit product into the three words at `acc` with
 the carry chained through the third word (`mul; add; adc; adc` on x64,
@@ -1896,6 +2033,12 @@ for i32 i = 0; i < n; i = i + 8 {
 f32 total = sum8(acc);
 ```
 
+The eight lanes of `dot_i8x32` and `dot_acc_i8` hold partial sums
+whose grouping of the 32 products is target-defined, and the two
+builtins group differently on x64. Reduce with `sum8`; a lane on its
+own is not portable, and lanes of the two builtins do not add up
+lane-wise. The same holds for the four lanes of the `i8x16` form.
+
 ### Threading (builtins)
 
 ```c
@@ -2110,6 +2253,15 @@ i32 main() {
 nothing once it is done. `fiber_done` is true after the entry function
 has returned. `fiber_destroy` frees the fiber's stack.
 
+A fiber can switch to another fiber. `fiber_yield` and the return of
+the entry function hand control back to whoever switched the fiber in,
+main or another fiber.
+
+The stack is 64 KiB, or the size given as a third argument,
+`fiber_create(entry, arg, 1 << 20)`, rounded up to whole pages. A guard
+page below it makes an overflow fault at the guard instead of writing
+into the heap. On `uefi` the stack is a heap block without a guard.
+
 ## C interop
 
 ### DLL imports (Windows)
@@ -2159,10 +2311,16 @@ extern "QuartzCore" void* kCAFilterNearest;
 
 Reading the name yields the value stored at the symbol; `&name`
 yields the symbol's address. The named library is linked
-automatically. A bare framework name (or `"Foundation.framework"`)
+automatically. Windows DLLs are not covered: the PE writer imports
+functions only, so a DLL's data symbol is read through an accessor
+function. A bare framework name (or `"Foundation.framework"`)
 expands to its full system path, same rule as `@link "Foundation"`.
 Path-shaped values and explicit suffixes (`.dylib`, `.so`, `.o`)
-pass through untouched.
+keep their spelling. On macOS a relative library is recorded relative
+to the loading image: `libfoo.dylib` and `foo.dll` become
+`@loader_path/libfoo.dylib`, `sub/libfoo.dylib` becomes
+`@loader_path/sub/libfoo.dylib`; absolute and `@rpath/...` paths are
+written as given.
 
 A `from "symbol"` clause binds the data symbol under a different
 minc name, same as for function externs. This is the way to import
@@ -3219,9 +3377,31 @@ i64 g = 1000000000000;
 i64 h = g * g;          // wraps in i64
 ```
 
+Literal arithmetic takes the width of where it lands: a declaration,
+an assignment, a call argument, an array element, a struct literal
+field or a `return` of type `i64` makes `1 << 33` an `i64`. Beside a
+typed operand it takes the operand's type when that is 32 bits or
+wider: with `i64 x`, `x == 1 << 40` compares against 2^40, and a
+literal that does not fit that operand's type is an error, as in a
+declaration (`x * 3000000000` with an i32 `x`). A narrower operand
+adopts the literal as a bit pattern (`flags & ~MASK` on a `u8`).
+`-2147483648` is an i32 literal like `-2147483647`. In an
+overloaded call it resolves as the computed constant would if written,
+so `f(1 << 33)` reaches `f(i64)`. In a
+generic call the parameter's type counts once it is known, from an
+explicit type argument, from the other arguments or from the expected
+return type: `vec_push(&v, 1 << 33)` into a `Vec<i64>` stores 2^33,
+while `twice(1 << 33)` on its own infers `T` as `i32` from the
+literal. A string literal argument follows the same rule: `Box<str> s
+= boxed("lit")` infers `T` as `str`. `cast(T, e)` types `e` the way `T x = e;` does,
+whatever surrounds the cast: `cast(u64, 1 << 33)` is 2^33. Where that
+declaration would reject a constant that does not fit `T`, the cast
+truncates it (`cast(u8, 300)` is 44).
+
 ### Division and modulo
 
 `/` truncates toward zero. `%` carries the sign of the dividend.
+Dividing by a literal zero is a compile error.
 
 ```c
 i32 a = -7 / 3;         // -2 (not -3)
@@ -3468,7 +3648,9 @@ f32 b = cast(f32, 1.0e-50);         // subnormal f32
 
 ### Comparisons
 
-`==`, `!=`, `<`, `>`, `<=`, `>=` work on integers and floats.
+`==`, `!=`, `<`, `>`, `<=`, `>=` work on integers and floats. A
+struct, union or array has no `==`; compare its fields. A `cast()`
+converts scalars and pointers, never a struct or union value.
 
 Mixed signed/unsigned operands are a static error. Cast one side
 explicitly:

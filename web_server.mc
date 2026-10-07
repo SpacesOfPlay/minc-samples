@@ -137,8 +137,7 @@ void handle_connection(Socket c) {
     str eff_path = path;
     if path.len == 1 { eff_path = "/index.html"; }
 
-    string fpath = url_to_filepath(eff_path);
-    defer free(fpath);
+    using string fpath = url_to_filepath(eff_path);
 
     FileData fd = file_read(fpath);
     if fd.data == null {
