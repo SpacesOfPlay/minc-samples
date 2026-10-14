@@ -1092,15 +1092,15 @@ Available `arch` values: `x64`, `arm64`, `wasm32`.
 ### Compiler version
 
 ```c
-@minc_min_version "0.9.17"      // refuse to compile with anything older
+@minc_min_version "0.9.18"      // refuse to compile with anything older
 
-when MINC_VERSION >= 9011 { ... }   // gate on the running compiler
+when MINC_VERSION >= 9018 { ... }   // gate on the running compiler
 ```
 
 `@minc_min_version` : the oldest compiler that can build the file.
 
 `MINC_VERSION` encoded as `major*1000000 + minor*1000 + patch`.
-0.9.17 is `9017`, 1.0.0 would be `1000000`.
+0.9.18 is `9018`, 1.0.0 would be `1000000`.
 
 ## Expressions
 
@@ -2842,8 +2842,32 @@ and strides count scalar elements either way. In `simdgroup_mad`, `a`
 and `b` share one element type and `c` and `d` share one; f16 operands
 into an f32 accumulator is allowed.
 
-**Atomic** (compute):
-`atomic_add`, `atomic_min`, `atomic_max`, `atomic_exchange`, `atomic_cmp_exchange`
+**Atomic** (compute and fragment):
+
+| Builtin | Meaning |
+|---------|---------|
+| `atomic_add(buf, index, value)` → `T` | Add; returns the value the slot held before |
+| `atomic_min(buf, index, value)` → `T` | Store the minimum; returns the previous value |
+| `atomic_max(buf, index, value)` → `T` | Store the maximum; returns the previous value |
+| `atomic_exchange(buf, index, value)` → `T` | Store `value`; returns the previous value |
+| `atomic_cmp_exchange(buf, index, compare, value)` → `T` | Store `value` if the slot holds `compare`; returns the previous value, so the store happened when it equals `compare` |
+
+`buf` is a storage buffer or a `@shared` array with an `i32` or `u32`
+element type `T`. The result may be discarded. Compare-exchange is
+strong on every backend: a slot that holds `compare` is always
+exchanged.
+
+```c
+u32 slot = atomic_add(counter, 0, 1);      // claim an output slot
+out[slot] = item;
+
+u32 old = 0;                               // compare-exchange retry loop
+u32 seen = atomic_cmp_exchange(total, 0, old, old + 1);
+while seen != old {
+    old = seen;
+    seen = atomic_cmp_exchange(total, 0, old, old + 1);
+}
+```
 
 ### Using shaders with sokol
 

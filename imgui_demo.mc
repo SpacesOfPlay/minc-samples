@@ -443,12 +443,13 @@ void imgui_frame() {
     // Tools ▸ Metrics/Debugger — the real ImGui::ShowMetricsWindow
     if g_show_metrics { ImGui_ShowMetricsWindow(&g_show_metrics); }
 
+    simgui_flush();
     sg_begin_pass(&sg_pass{
         .action.colors[0].load_action = SG_LOADACTION_CLEAR,
         .action.colors[0].clear_value = sg_color{ 0.39f, 0.58f, 0.93f, 1.0f },
         .swapchain = sglue_swapchain(),
     });
-    simgui_render();
+    simgui_draw();
     sg_end_pass();
     sg_commit();
 }

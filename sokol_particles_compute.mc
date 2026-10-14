@@ -103,7 +103,6 @@ void init() {
     particle_buf = sg_make_buffer(&sg_buffer_desc{
         .usage.storage_buffer = true,
         .usage.vertex_buffer  = true,
-        .usage.immutable      = true,
         .size      = sizeof(init_data),
         .data.ptr  = &init_data,
         .data.size = sizeof(init_data),
