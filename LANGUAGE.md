@@ -234,6 +234,17 @@ i32[4] b = arr;                 // value copy
 b = arr;                        // whole-array copy assignment (lengths must match)
 ```
 
+An array converts to a pointer to its first element where a `T*` is
+expected. A ternary with two array arms does the same in a pointer
+context, so the arms may differ in length.
+
+```c
+u8[4] small = {1, 2, 3, 4};
+u8[8] large = {5, 6, 7, 8, 9, 10, 11, 12};
+u8* tab = wide ? large : small;   // u8*, aliases one of the two
+var copy = flag ? small : small2; // u8[4], a copy of the chosen one
+```
+
 ### Slices
 
 ```c
@@ -1193,12 +1204,11 @@ u64 bad = x + sz;             // ERROR: i64 + u64 mixed sign in an expression
 (Runtime value behavior of the promoted types is under "Numerics"
 below.)
 
-Binops on two same-signedness narrow operands (`u8`/`u16` or
-`i8`/`i16`):
+Binops on two narrow operands (`u8`, `u16`, `i8`, `i16`):
 
 | Operators | Result type |
 |---|---|
-| `+  -  *  /  %  <<  >>` | `i32` / `u32` (the result can exceed the operand width) |
+| `+  -  *  /  %  <<  >>` | `i32` / `u32` (the result can exceed the operand width); an opposite-sign pair (`u16 + i16`) is `i32`, since both values fit |
 | `&  \|  ^` | operand width (`u8 ^ u8` is `u8`) |
 | unary `~` | operand width (`~a` is a `u8` for `u8 a`; 254 when `a` is 1) |
 | unary `-` | `i32` / `u32`, like the arithmetic binops (`-i16` is `i32`) |
@@ -3409,6 +3419,12 @@ wider: with `i64 x`, `x == 1 << 40` compares against 2^40, and a
 literal that does not fit that operand's type is an error, as in a
 declaration (`x * 3000000000` with an i32 `x`). A narrower operand
 adopts the literal as a bit pattern (`flags & ~MASK` on a `u8`).
+A shift with a literal on the left counts as literal arithmetic even
+when the count is a variable: `1 << n` and `(1 << n) - 1` take their
+type from the declaration or the other operand, never from `n`. The
+operands of a comparison take no type from the declaration the
+comparison lands in: `i64 ok = bits <= (1 << len)` compares in the
+type of `bits`.
 `-2147483648` is an i32 literal like `-2147483647`. In an
 overloaded call it resolves as the computed constant would if written,
 so `f(1 << 33)` reaches `f(i64)`. In a
