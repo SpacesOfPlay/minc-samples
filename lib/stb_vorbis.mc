@@ -492,8 +492,6 @@ when !(defined(STB_VORBIS_NO_INTEGER_CONVERSION)) {
 //     you'd ever want to do it except for debugging.
 // #define STB_VORBIS_NO_DEFER_FLOOR
 //////////////////////////////////////////////////////////////////////////////
-when !(defined(STB_VORBIS_NO_INTEGER_CONVERSION)) {
-}
 
 private {
 i32 error(vorb* f, STBVorbisError e) {
@@ -2292,7 +2290,7 @@ i32 do_floor(vorb* f, Mapping* map, i32 i, i32 n, f32* target, YTYPE* finalY, ui
         i32 j;
         i32 q;
         i32 lx = 0;
-        i32 ly = finalY[0] * g.floor1_multiplier;
+        i32 ly = cast(i32, finalY[0]) * cast(i32, g.floor1_multiplier);
         for q = 1; q < g.values; ++q {
             j = cast(i32, g.sorted_order[q]);
             i32 stbv__use_point;
@@ -2303,7 +2301,7 @@ i32 do_floor(vorb* f, Mapping* map, i32 i, i32 n, f32* target, YTYPE* finalY, ui
                 stbv__use_point = cast(i32, step2_flag[j]);
             }
             if stbv__use_point != 0 {
-                i32 hy = finalY[j] * g.floor1_multiplier;
+                i32 hy = cast(i32, finalY[j]) * cast(i32, g.floor1_multiplier);
                 var hx = cast(i32, g.Xlist[j]);
                 if lx != hx {
                     draw_line(target, lx, ly, hx, hy, n2);

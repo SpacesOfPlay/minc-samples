@@ -1037,6 +1037,24 @@ discards the value. It silences `@must_use` at one call site. The
 warning is also suppressed inside `defer { ... }` (the deferred call
 has no caller to assign to).
 
+### `@inline`
+
+`@inline` on a function puts its body into every direct call site,
+whatever its size and whatever it calls itself, like C's
+`always_inline`:
+
+```c
+@inline
+Match find_match(u8* ip, u8* end, Params p) { ... }
+```
+
+Calls through a function pointer still reach an out-of-line copy.
+These are compile errors: `@inline` on a function that calls itself,
+on `@inline` functions that call each other in a cycle, on a variadic
+function, on an `@interrupt` handler, and on a function that switches
+fibers. Without the annotation the compiler decides by size and
+shape.
+
 ### Bare blocks
 
 Bare `{ }` blocks create a new scope. Variables declared inside are not visible
@@ -1945,12 +1963,35 @@ The byte-lane rows compile on every target, x64, arm64 and wasm:
 | Function                                   | Returns | Notes |
 |--------------------------------------------|---------|-------|
 | `byte_shuffle(i8x16 v, i8x16 idx)`         | `i8x16` | lane i = `v[idx[i] & 15]`, or 0 when bit 7 of `idx[i]` is set; bits 4..6 are ignored (vpshufb semantics everywhere) |
+| `byte_shuffle2(i8x16 lo, i8x16 hi, i8x16 idx)` | `i8x16` | lane i = byte `idx[i]` of the 32-byte table `lo:hi`, or 0 when `idx[i]` is 32 or more (TBL semantics everywhere: one `tbl` on arm64, two swizzles on wasm, two `vpshufb` plus a blend and a mask on x64) |
 | `byte_shl(i8x16 v, n)`                     | `i8x16` | the vector moved `n` bytes toward higher lanes, zero fill |
 | `byte_shr(i8x16 v, n)`                     | `i8x16` | toward lower lanes, zero fill |
 | `byte_align(i8x16 hi, i8x16 lo, n)`        | `i8x16` | bytes `n..n+15` of the 32-byte pair `lo:hi` |
 
 `n` is a compile-time integer constant from 0 to 16 (an immediate in
 the encoding); anything else is a compile error.
+
+Lane arithmetic on the same container, one instruction on every
+target. Lane 0 is byte 0, or bytes 0-1 for the 16-bit rows; every lane
+wraps, except the pack, which saturates.
+
+| Function                                   | Returns | Notes |
+|--------------------------------------------|---------|-------|
+| `i8x16_add(i8x16 a, i8x16 b)`              | `i8x16` | byte lanes added |
+| `i8x16_sub(i8x16 a, i8x16 b)`              | `i8x16` | byte lanes subtracted |
+| `i8x16_blend(i8x16 a, i8x16 b, i8x16 mask)` | `i8x16` | lane i = `b[i]` where bit 7 of `mask[i]` is set, else `a[i]` (vpblendvb semantics) |
+| `i8x16_eq(i8x16 a, i8x16 b)`               | `i8x16` | all-ones byte where the lanes are equal, zero elsewhere |
+| `i8x16_movemask(i8x16 v)`                  | `i32`   | bit i = bit 7 of lane i (vpmovmskb) |
+| `i16x8_add(i8x16 a, i8x16 b)`              | `i8x16` | 16-bit lanes added |
+| `i16x8_sub(i8x16 a, i8x16 b)`              | `i8x16` | 16-bit lanes subtracted |
+| `i16x8_mul(i8x16 a, i8x16 b)`              | `i8x16` | the low 16 bits of each 16-bit lane product |
+| `i16x8_shl(i8x16 v, n)`                    | `i8x16` | each 16-bit lane left by `n` bits |
+| `u16x8_shr(i8x16 v, n)`                    | `i8x16` | each 16-bit lane right by `n` bits, zero fill |
+| `i16x8_shr(i8x16 v, n)`                    | `i8x16` | each 16-bit lane right by `n` bits, sign fill |
+| `i16x8_pack_u8(i8x16 a, i8x16 b)`          | `i8x16` | the sixteen signed 16-bit lanes of `a` then `b`, saturated to bytes 0..255 (vpackuswb) |
+
+`n` is again a constant from 0 to 16; 16 gives the zero vector for the
+logical shifts and the sign fill for `i16x8_shr`.
 
 The crypto rows need the probe above to have said yes, and are a
 compile error on `--target wasm`. A library that builds everywhere puts
