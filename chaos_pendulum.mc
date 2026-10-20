@@ -823,7 +823,8 @@ sapp_desc sokol_main() {
         .height = 720,
         .high_dpi = true,
         .sample_count = 4,
-        .window_title = "minc chaos pendulum"
+        .window_title = "minc chaos pendulum",
+        .icon.sokol_default = true
     };
     return d;
 }

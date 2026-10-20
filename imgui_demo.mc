@@ -476,5 +476,6 @@ sapp_desc sokol_main() {
         .height = WINDOW_H,
         .high_dpi = true,
         .window_title = "Dear ImGui Demo (minc)",
+        .icon.sokol_default = true,
     };
 }

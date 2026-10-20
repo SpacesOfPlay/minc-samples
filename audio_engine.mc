@@ -544,7 +544,8 @@ sapp_desc sokol_main() {
         .height = 720,
         .high_dpi = true,
         .sample_count = 4,
-        .window_title = "minc audio engine"
+        .window_title = "minc audio engine",
+        .icon.sokol_default = true
     };
     return d;
 }
