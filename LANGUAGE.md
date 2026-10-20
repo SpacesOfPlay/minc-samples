@@ -1990,8 +1990,20 @@ wraps, except the pack, which saturates.
 | `i16x8_shr(i8x16 v, n)`                    | `i8x16` | each 16-bit lane right by `n` bits, sign fill |
 | `i16x8_pack_u8(i8x16 a, i8x16 b)`          | `i8x16` | the sixteen signed 16-bit lanes of `a` then `b`, saturated to bytes 0..255 (vpackuswb) |
 
-`n` is again a constant from 0 to 16; 16 gives the zero vector for the
-logical shifts and the sign fill for `i16x8_shr`.
+`n` is a constant from 0 to 16, or any integer expression read at run
+time. A count of 16 or more gives the zero vector for the logical
+shifts and the sign fill for `i16x8_shr`, on every target; a negative
+count is undefined. A constant shifts by an immediate; a run-time count
+goes through a register (`vpsllw xmm, xmm, xmm` on x64, `ushl` /
+`sshl` on arm64, `i16x8.shl` on wasm).
+
+The same family on `i8x32`, 32 byte lanes and sixteen 16-bit lanes:
+`i8x32_add`, `i8x32_sub`, `i8x32_eq`, `i8x32_blend`, `i8x32_movemask`
+(32 bits), `i16x16_add`, `i16x16_sub`, `i16x16_mul`, `i16x16_shl`,
+`u16x16_shr`, `i16x16_shr` and `i16x16_pack_u8`. Each lane means what
+the `i8x16` row means; the pack saturates each 128-bit half on its
+own, as `vpackuswb ymm` does. Under the `-avx2` targets each is one
+`ymm` instruction; elsewhere the `i8x16` row on each half.
 
 The crypto rows need the probe above to have said yes, and are a
 compile error on `--target wasm`. A library that builds everywhere puts
@@ -2056,6 +2068,7 @@ enters at `efi_main` alone carries no check.
 | `i8x32_pack(i8x16 lo, i8x16 hi)`           | `i8x32`  | lo in bytes 0-15, hi in 16-31  |
 | `i8x32_lo(i8x32)` / `i8x32_hi(i8x32)`      | `i8x16`  | bytes 0-15 / 16-31             |
 | `byte_shuffle(i8x32 v, i8x32 idx)`         | `i8x32`  | within each 128-bit lane       |
+| `i8x32_add/sub/eq`, `i8x32_blend`, `i8x32_movemask`, `i16x16_*` | | the lane family, see the byte-lane rows above |
 | `aesenc(i8x32, i8x32)` and the other rounds, `clmul(i8x32, i8x32, which)` | `i8x32` | see the crypto rows above |
 | `i8x32 & | ^ ~`, `i32x8 + - & | ^ ~`       |          | one `ymm` op; `cast()` between `i8x32` and `i32x8` is free |
 | `f32x8_add/sub/mul(f32x8, f32x8)`          | `f32x8`  | component-wise                 |
