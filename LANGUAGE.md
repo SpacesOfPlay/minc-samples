@@ -218,6 +218,7 @@ i32* p = &x;                    // pointer to i32
 p.field                         // auto-dereference (no -> needed)
 p + n                           // pointer arithmetic (advances by n * sizeof(*p))
 q - p                           // element distance, an i64; both point at the same element type
+cast(u8*, v) + n                // a void* has no element size: cast it before arithmetic
 *p++ = expr;                    // write to *p, then p++ (postfix yields old)
 *p-- = expr;                    // write to *p, then p-- (postfix yields old)
 ```
@@ -612,7 +613,9 @@ enum Bits {
 }
 ```
 
-Enum values are `i32` constants.
+Enum values are `i32` constants. A value from INT32_MIN to UINT32_MAX
+takes its 32-bit pattern (`HIGH` above is INT32_MIN, and a member
+computed from it uses that), and a value past 32 bits is an error.
 
 An enum name and an enum-typed variable convert by different rules:
 
@@ -1121,7 +1124,7 @@ Available `arch` values: `x64`, `arm64`, `wasm32`.
 ### Compiler version
 
 ```c
-@minc_min_version "0.9.18"      // refuse to compile with anything older
+@minc_min_version "0.9.19"      // refuse to compile with anything older
 
 when MINC_VERSION >= 9018 { ... }   // gate on the running compiler
 ```
@@ -1145,7 +1148,7 @@ when MINC_VERSION >= 9018 { ... }   // gate on the running compiler
 | Assignment | `=  +=  -=  *=  /=  %=  &=  \|=  ^=  <<=  >>=`                 |
 | Ternary    | `condition ? true_expr : false_expr`                           |
 | Cast       | `cast(Type, expr)`                                             |
-| Sizeof     | `sizeof(Type)` or `sizeof(expr)` (returns size in bytes)       |
+| Sizeof     | `sizeof(Type)` or `sizeof(expr)` (size in bytes, an `i64` constant that coerces to an integer type it fits, like a literal) |
 | Address-of | `&expr`                                                        |
 | Deref      | `*expr`                                                        |
 | Member     | `expr.field`                                                   |
@@ -1156,8 +1159,10 @@ when MINC_VERSION >= 9018 { ... }   // gate on the running compiler
 Operands, call arguments, struct literal fields and array initializer
 elements are evaluated left to right. An assignment evaluates its
 target first, then the value: `a[next()] = next()` indexes with the
-first call, and `a[j] = j++` stores into the old `a[j]`. `&&` and `||`
-stop at the first operand that decides the result.
+first call, and `a[j] = j++` stores into the old `a[j]`. A read comes
+before a later operand's write: `x + x++` adds the old `x` twice, and
+`take(b, bump(&b))` passes the struct `b` as it was before `bump`.
+`&&` and `||` stop at the first operand that decides the result.
 
 ### Increment / decrement
 
@@ -1270,6 +1275,7 @@ Mixing signed and unsigned integer operands:
 | `+  -  *  /  %` | Error |
 | `>>` | Error (sign-sensitive: arithmetic vs logical shift) |
 | `&  \|  ^  <<`, same width | OK; the result takes the left operand's type |
+| `c ? x : y` | OK; the narrowest signed type that holds both arms (`i8` and `u8` give `i16`, `i32` and `u32` give `i64`, `i64` and `u32` stay `i64`); a `u64` arm beside a signed one is an error |
 | Any operator vs an integer literal or enum member | OK; the literal coerces |
 
 A literal coerces to the other operand's type, and a fold of two
@@ -1333,6 +1339,8 @@ swap(&a, &b);              // infers T from pointer type
 // Explicit type argument (turbofish syntax)
 identity<i64>(42);         // forces T = i64
 identity<i64>(1 << 33);    // the argument is typed by the i64 parameter
+                           // beside a plain function of the same name, type
+                           // arguments select the generic one
 fn(i64): i64 f = identity<i64>;   // the instantiation as a value
 
 // Bidirectional inference from return type
@@ -1585,6 +1593,19 @@ string move(string s)            // transfer ownership, invalidate source
 bytes on every target, which covers any scalar, any struct of them, and
 a 128-bit SIMD load. A stronger alignment needs an explicit aligned
 allocator.
+
+A global, thread-local or local variable that holds a vector of 16
+bytes or more (`float4`, `f64x2`, `i8x16`, `f32x8`, `float4x4`, or a
+struct or array containing one) starts on a 16-byte boundary on every
+target.
+
+Inside a struct, a vector of 16 bytes or more aligns to 16 and an
+8-byte vector (`float2`, `int2`, `uint2`) to 8; a 12-byte `float3`
+keeps the 4 of its elements. A struct, tagged union or `unsafe_union`
+aligns to its widest member and `sizeof` rounds up to that alignment,
+so `struct { i32 a; float4 b; }` puts `b` at 16 and is 32 bytes.
+An array, struct or union holds at most 2147483647 bytes; a larger
+one is a compile error.
 
 On Windows and macOS these call the C runtime allocator. On wasm,
 Linux and Android the heap is minc's own, `lib/mem_heap.mc`: a
@@ -2671,17 +2692,17 @@ integer texture, is a compile error.
 
 A storage buffer is shared memory. The CPU writes elements and the
 shader reads them at the offsets its own language mandates, and the
-two disagree on vector alignment:
+two disagree on the alignment of 3-component vectors:
 
 | Field type | minc | GPU (std430 / MSL / WGSL) |
 |---|---|---|
 | scalars (`f32`, `i32`, `u32`) | 4 | 4 |
-| `float2` / `int2` / `uint2`   | 4 | 8 |
+| `float2` / `int2` / `uint2`   | 8 | 8 |
 | `float3` / `int3` / `uint3`   | 4 | 16 |
-| `float4` / `int4` / `uint4`   | 4 | 16 |
+| `float4` / `int4` / `uint4`   | 16 | 16 |
 
-minc packs vectors to 4 since its SIMD memory operations are
-unaligned; the shader languages mandate the wider alignments.
+A `float3` is 12 bytes in minc and packs to its elements; the shader
+languages give it the alignment of a `float4`.
 
 `@gpu_layout` applies the GPU rules on the CPU side. A single memcpy
 into a buffer is correct:
@@ -2690,8 +2711,8 @@ into a buffer is correct:
 @gpu_layout
 struct sb_vertex {
     float3 pos;      // offset 0
-    float4 color;    // offset 16, or 12 without the annotation
-}                    // 32 bytes, or 28 without
+    float3 normal;   // offset 16, or 12 without the annotation
+}                    // 32 bytes, or 24 without
 ```
 
 A struct used as a `@buffer` or `@rwbuffer` element must match the GPU
@@ -2702,8 +2723,8 @@ it expects. Resolve it with the annotation or with hand-written padding.
 
 The same rule covers `@uniform` blocks. Every shader dialect reads a
 uniform block at these offsets; HLSL's cbuffer packing and WGSL's
-uniform rules mandate them. A struct like `{f32 mode; float4x4 mvp;}` 
-needs the annotation: it puts `mvp` at 16 and `sizeof` at 80, and 
+uniform rules mandate them. A struct like `{f32 mode; float3 dir;}`
+needs the annotation: it puts `dir` at 16 and `sizeof` at 32, and
 uploading `sizeof(p)` bytes of the struct is then correct on every
 backend. A struct `@uniform` must be the only parameter in its block.
 Bare `@uniform` params sharing an explicit slot follow the same offset
@@ -3412,6 +3433,9 @@ on its own.
 | `ios-sim`      | Mach-O executable  | ARM64        | `minc app.mc --target ios-sim -o app`      |
 | `android`      | ELF shared library | ARM64        | `minc app.mc --target android -o libapp.so`|
 
+The x86-64 targets emit FMA3, BMI1 (`tzcnt`) and LZCNT instructions without a
+runtime check, so they need a Haswell, Piledriver or later CPU.
+
 The default target matches the host platform. Cross-compilation produces native
 binaries without requiring any toolchain for the target platform.
 
@@ -3692,8 +3716,10 @@ i32 b = cast(i32, -1.7);            // -1
 
 Saturation is to the underlying conversion width: `i32` for any
 i32-or-narrower target, `i64` for `i64`. Narrower destinations
-(`i8`, `i16`, `u8`, `u16`, `u32`) take the low bits of the
-saturated value. A huge float becomes `INT32_MAX` first and
+(`i8`, `i16`, `u8`, `u16`) take the low bits of the saturated
+value. `u32` and `u64` saturate to their own range, with negative
+values and NaN giving 0: `cast(u32, 2147483648.0)` is 2147483648
+and `cast(u32, -1.0)` is 0. A huge float becomes `INT32_MAX` first and
 then truncates. If you want i16/i8-range saturation, clamp the
 float yourself before the cast.
 

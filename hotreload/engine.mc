@@ -336,7 +336,7 @@ str SCRIPT_V2 =
     "    api.set_vel(w, p, v);\n"
     "    float2 np = api.get_pos(w, p) + v * c.dt;\n"
     "    api.set_pos(w, p, np);\n"
-    "    if c.input.fire { api.spawn_bullet(w, np); }\n"
+    "    if input_down(&c.input, INPUT_FIRE) { api.spawn_bullet(w, np); }\n"
     "}\n";
 
 // Write a script version plus the shared private-state helper.
@@ -357,7 +357,7 @@ i32 run_demo() {
     mod.handle = null;  mod.update = null;  mod.reloaded = null;  mod.src_hash = 0;
 
     InputState in;
-    in.move = float2{1.0f, 0.0f};  in.fire = true;
+    in.move = float2{1.0f, 0.0f};  in.buttons = INPUT_FIRE;
 
     print("=== minc hot-reload demo ===\n");
     print("-- script v1: move +x, speed 10 --\n");
@@ -393,6 +393,7 @@ i32 run_demo() {
     if bullets != 3                  { print("FAIL: bullet count wrong (v2 fire not applied?)\n"); ok = false; }
     if g_reload_count != 2           { print("FAIL: reload count wrong\n"); ok = false; }
     if !priv_magic_ok || priv_ticks != 6 { print("FAIL: script-private state lost across reload\n"); ok = false; }
+    if sizeof(InputState) != 16 || sizeof(ScriptCtx) != 40 { print("FAIL: game_abi layout has implicit padding\n"); ok = false; }
 
     if mod.handle != null { minc_module_free(mod.handle); }
     if ok { print("demo: all checks passed\n"); return 0; }
@@ -411,7 +412,7 @@ i32 run_watch() {
 
     InputState in;
     in.move = {1.0f, 0.0f};
-    in.fire = false;
+    in.buttons = 0;
 
     // Tier-2 watch: a kernel notification tells us when the script dir
     // changes, so quiet frames skip the per-tick file stamp. Falls back

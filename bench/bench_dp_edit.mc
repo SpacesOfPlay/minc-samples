@@ -1,7 +1,7 @@
 // bench_dp_edit.mc - Levenshtein edit distance via dynamic programming (O(n^2) DP table)
 #include "bench_util.mc"
 
-i32 edit_distance(u8* a, i32 alen, u8* b, i32 blen, i32* prev, i32* curr) {
+i32 edit_distance(u8* a, i32 alen, u8* b, i32 blen, noalias i32* prev, noalias i32* curr) {
     // Initialize prev row
     for i32 j = 0; j <= blen; j++ {
         prev[j] = j;

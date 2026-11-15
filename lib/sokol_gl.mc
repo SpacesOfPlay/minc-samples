@@ -1417,6 +1417,10 @@ sgl_context_desc_t _sgl_context_desc_defaults(sgl_context_desc_t* desc) {
     sgl_context_desc_t res = *desc;
     res.max_vertices = desc.max_vertices == 0 ? 1 << 16 : desc.max_vertices;
     res.max_commands = desc.max_commands == 0 ? 1 << 14 : desc.max_commands;
+    sg_desc sgdesc = sg_query_desc();
+    res.color_format = desc.color_format == 0 ? sgdesc.environment.defaults.color_format : desc.color_format;
+    res.depth_format = desc.depth_format == 0 ? sgdesc.environment.defaults.depth_format : desc.depth_format;
+    res.sample_count = desc.sample_count == 0 ? sgdesc.environment.defaults.sample_count : desc.sample_count;
     return res;
 }
 }
@@ -1880,7 +1884,7 @@ void _sgl_setup_common() {
     img_desc.height = 8;
     img_desc.num_mipmaps = 1;
     img_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
-    img_desc.data.mip_levels[0] = sg_range{&pixels, sizeof(pixels)};
+    img_desc.data = sg_range{&pixels, sizeof(pixels)};
     img_desc.label = "sgl-default-texture";
     _sgl.def_img = sg_make_image(&img_desc);
     assert(cast(u32, SG_INVALID_ID) != _sgl.def_img.id);

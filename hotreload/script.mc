@@ -29,7 +29,7 @@ export void script_update(ScriptCtx* c) {
     float2 np = api.get_pos(w, p) + v * c.dt;
     api.set_pos(w, p, np);
 
-    if c.input.fire {
+    if input_down(&c.input, INPUT_FIRE) {
         api.spawn_bullet(w, np);
     }
 }

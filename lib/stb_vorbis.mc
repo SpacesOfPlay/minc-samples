@@ -570,7 +570,7 @@ void crc32_init() {
         {
             s = cast(uint32, i) << 24;
             for j = 0; j < 8; ++j {
-                s = s << 1 ^ cast(u32, s >= cast(u32, 1 << 31) ? 0x04c11db7 : 0);
+                s = s << 1 ^ cast(u32, s >= 1 << 31 ? 0x04c11db7 : 0);
             }
         }
         crc_table[i] = s;
@@ -818,18 +818,18 @@ void compute_twiddle_factors(i32 n, f32* A, f32* B, f32* C) {
     i32 k;
     i32 k2;
             k2 = 0;
-    for k = k2; k < n4; ++k {
+    for k = k2; k < n4; k2 += 2 {
         A[k2] = cast(f32, cos(cast(f64, cast(f32, 4 * k) * 3.141592653589793f / cast(f32, n))));
         A[k2 + 1] = cast(f32, -sin(cast(f64, cast(f32, 4 * k) * 3.141592653589793f / cast(f32, n))));
         B[k2] = cast(f32, cos(cast(f64, cast(f32, k2 + 1) * 3.141592653589793f / cast(f32, n) / 2.0f))) * 0.5f;
         B[k2 + 1] = cast(f32, sin(cast(f64, cast(f32, k2 + 1) * 3.141592653589793f / cast(f32, n) / 2.0f))) * 0.5f;
-        k2 += 2;
+        ++k;
     }
             k2 = 0;
-    for k = k2; k < n8; ++k {
+    for k = k2; k < n8; k2 += 2 {
         C[k2] = cast(f32, cos(cast(f64, cast(f32, 2 * (k2 + 1)) * 3.141592653589793f / cast(f32, n))));
         C[k2 + 1] = cast(f32, -sin(cast(f64, cast(f32, 2 * (k2 + 1)) * 3.141592653589793f / cast(f32, n))));
-        k2 += 2;
+        ++k;
     }
 }
 
@@ -1679,7 +1679,7 @@ void decode_residue(vorb* f, f32** residue_buffers, i32 ch, i32 n, i32 rn, uint8
                             }
                         }
                     }
-                    for i = 0; i < classwords && pcount < part_read; ++i {
+                    for i = 0; i < classwords && pcount < part_read; ++pcount {
                         var z = cast(i32, r.begin + cast(u32, pcount) * r.part_size);
                         i32 c;
                         when !(defined(STB_VORBIS_DIVIDES_IN_RESIDUE)) {
@@ -1704,7 +1704,7 @@ void decode_residue(vorb* f, f32** residue_buffers, i32 ch, i32 n, i32 rn, uint8
                             c_inter = z & 1;
                             p_inter = z >> 1;
                         }
-                        ++pcount;
+                        ++i;
                     }
                     when !(defined(STB_VORBIS_DIVIDES_IN_RESIDUE)) {
                         ++class_set;
@@ -1749,7 +1749,7 @@ void decode_residue(vorb* f, f32** residue_buffers, i32 ch, i32 n, i32 rn, uint8
                             }
                         }
                     }
-                    for i = 0; i < classwords && pcount < part_read; ++i {
+                    for i = 0; i < classwords && pcount < part_read; ++pcount {
                         var z = cast(i32, r.begin + cast(u32, pcount) * r.part_size);
                         i32 c;
                         when !(defined(STB_VORBIS_DIVIDES_IN_RESIDUE)) {
@@ -1768,7 +1768,7 @@ void decode_residue(vorb* f, f32** residue_buffers, i32 ch, i32 n, i32 rn, uint8
                             c_inter = z % ch;
                             p_inter = z / ch;
                         }
-                        ++pcount;
+                        ++i;
                     }
                     when !(defined(STB_VORBIS_DIVIDES_IN_RESIDUE)) {
                         ++class_set;
@@ -1820,7 +1820,7 @@ void decode_residue(vorb* f, f32** residue_buffers, i32 ch, i32 n, i32 rn, uint8
                     }
                 }
             }
-            for i = 0; i < classwords && pcount < part_read; ++i {
+            for i = 0; i < classwords && pcount < part_read; ++pcount {
                 for j = 0; j < ch; ++j {
                     if do_not_decode[j] == 0 {
                         i32 c;
@@ -1841,7 +1841,7 @@ void decode_residue(vorb* f, f32** residue_buffers, i32 ch, i32 n, i32 rn, uint8
                         }
                     }
                 }
-                ++pcount;
+                ++i;
             }
             when !(defined(STB_VORBIS_DIVIDES_IN_RESIDUE)) {
                 ++class_set;
@@ -4009,7 +4009,7 @@ u32 stb_vorbis_stream_length_in_samples(stb_vorbis* f) {
         }
         set_file_offset(f, restore_offset);
     }
-    return cast(u32, f.total_samples == 0xffffffff ? 0 : f.total_samples);
+    return f.total_samples == 0xffffffff ? 0 : f.total_samples;
 }
 
 f32 stb_vorbis_stream_length_in_seconds(stb_vorbis* f) {
