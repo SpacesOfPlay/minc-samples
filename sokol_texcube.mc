@@ -106,8 +106,8 @@ void init() {
     sg_image img = sg_make_image(&sg_image_desc{
         .width = tex.width, .height = tex.height,
         .pixel_format = SG_PIXELFORMAT_RGBA8,
-        .data.mip_levels[0].ptr = tex.pixels,
-        .data.mip_levels[0].size = tex.width * tex.height * 4,
+        .data.ptr = tex.pixels,
+        .data.size = tex.width * tex.height * 4,
     });
 
     g_tex_view = sg_make_view(&sg_view_desc{ .texture.image = img });

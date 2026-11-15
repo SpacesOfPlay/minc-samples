@@ -1,14 +1,20 @@
 // game_abi.mc — the engine <-> script contract.
 
-const u32 GAME_ABI_VERSION = 2;
+const u32 GAME_ABI_VERSION = 3;
 
 type Entity = u32;      // 0 = invalid
 type World = void*;     // opaque
 
+// Explicit fields, no compiler padding: 16 bytes, 8-aligned.
 struct InputState {
     float2 move;
-    bool   fire;
+    u32    buttons;     // INPUT_* bits
+    u32    reserved;
 }
+
+const u32 INPUT_FIRE = 1;
+
+bool input_down(InputState* in, u32 button) { return (in.buttons & button) != 0; }
 
 // Engine service api handed to the script
 //
@@ -64,8 +70,9 @@ struct HostApi {
 struct ScriptCtx {
     HostApi*   api;
     World      world;
-    f32        dt;
     InputState input;
+    f32        dt;
+    u32        reserved;
 }
 
 // Script module entry points, resolved by name after a reload.
